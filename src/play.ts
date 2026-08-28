@@ -3,8 +3,20 @@ import { AudioPlayer } from "./audioplayer";
 import { type Box, type Sign } from "./collision"
 import { Keyboard } from "./keyboard";
 import { Camera2D } from "./webgl/camera2d";
+import { Color } from "./webgl/color";
 import { LineBatch } from "./webgl/linebatch";
 import type { WebGlRenderer } from "./webgl/renderer";
+
+export const Colors = {
+    dark_green: Color.hex(0x122020),
+    dark_blue: Color.hex(0x143464),
+    light_blue: Color.hex(0x249fde),
+    dark_red: Color.hex(0x3b1725),
+    light_red: Color.hex(0xb4202a),
+    light_cyan: Color.hex(0xa6fcdb),
+    dark_yellow: Color.hex(0xf9a31b),
+    light_yellow: Color.hex(0xffd541),
+}
 
 export class Spring {
     position: number;
@@ -143,18 +155,6 @@ export class CameraZones {
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
 class Game {
 
     show_end_menu = false
@@ -225,11 +225,14 @@ export function _update(dt: number) {
 export function _render() {
     if (!first_update_called) return
 
-
     cx.beginRender()
 
-    lb.drawLine([0, 0], [310, 100], 3)
+    // background
+    lb.drawLine(0, 180, 640, 180, 640, Colors.dark_green)
 
+    lb.drawLine(0, 0, 100, 100, 1, Colors.dark_red)
+    lb.drawLine(100, 100, 200, 200, 1, Colors.light_cyan)
+    lb.drawLine(204, 100, 200, 200, 2, Colors.light_yellow)
 
     lb.endDraw()
 

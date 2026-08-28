@@ -1,5 +1,5 @@
-import quadVS from './quadVS.vert?raw'
-import quadFS from './quadFS.frag?raw'
+import quadVS from './quadVS.vert'
+import quadFS from './quadFS.frag'
 
 export class WebGlRenderer {
 

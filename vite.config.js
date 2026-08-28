@@ -1,9 +1,11 @@
 import { defineConfig } from 'vite'
+import glsl from 'vite-plugin-glsl'
 
 let reserved = ['mid', 'bass', 'treble', 'black', 'white']
 
 
 export default defineConfig({
+  plugins: [glsl({ minify: true })],
   base: './',
   build: {
     assetsInlineLimit: 0,
