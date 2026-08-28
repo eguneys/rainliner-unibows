@@ -1,6 +1,5 @@
-import { ArcadeCameraCruise } from "./arcade";
 import { AudioPlayer } from "./audioplayer";
-import { type Box, type Sign } from "./collision"
+import { type Box } from "./collision"
 import { Keyboard } from "./keyboard";
 import { Mouse } from "./mouse";
 import { Camera2D } from "./webgl/camera2d";
@@ -10,6 +9,7 @@ import type { WebGlRenderer } from "./webgl/renderer";
 
 export const Colors = {
     dark_green: Color.hex(0x122020),
+    light_green: Color.hex(0x14a02e),
     dark_blue: Color.hex(0x143464),
     light_blue: Color.hex(0x249fde),
     dark_red: Color.hex(0x3b1725),
@@ -17,6 +17,7 @@ export const Colors = {
     light_cyan: Color.hex(0xa6fcdb),
     dark_yellow: Color.hex(0xf9a31b),
     light_yellow: Color.hex(0xffd541),
+    dark_brown: Color.hex(0x221c1a),
 }
 
 export class Spring {
@@ -113,49 +114,6 @@ export class Camera {
     }
 }
 
-
-
-export class CameraZones {
-
-    static Deadzone: Box = { x: 290, y: -40, w: 120, h: 160 }
-
-    arcade = ArcadeCameraCruise.create()
-
-    followDeadzone(target_x: number, target_y: number) {
-        let camera_x = this.arcade.body.x
-        let camera_y = this.arcade.body.y
-        let deadzone = CameraZones.Deadzone
-
-        let deadzone_req_h: Sign = 0
-        let deadzone_req_v: Sign = 0
-
-        if (camera_x < target_x + deadzone.x) {
-            deadzone_req_h = 1
-        } else if (camera_x > target_x + deadzone.x + deadzone.w) {
-            deadzone_req_h = -1
-        }
-
-        if (camera_y < target_y + deadzone.y) {
-            deadzone_req_v = 1
-        } else if (camera_y > target_y + deadzone.y + deadzone.h) {
-            deadzone_req_v = -1
-        }
-
-        if (target_y + deadzone.y > 300) {
-            deadzone_req_v = 0
-        }
-
-        this.arcade.deadzones = {
-            horizontal: deadzone_req_h as Sign,
-            vertical: deadzone_req_v
-        }
-    }
-
-    update(dt: number) {
-        this.arcade.update(dt)
-    }
-}
-
 class CursorParticles {
     particles: CursorParticle[] = []
 
@@ -181,13 +139,56 @@ class CursorParticles {
 
 }
 
+const fracture = (a: Pt, b: Pt, n = 7, amp = 13) => {
+    let res = []
+    for (let i = 0; i < n + 1; i++) {
+        const t = i / n;
+        const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
+        const nx = -(b.y - a.y), ny = (b.x - a.x); // perpendicular (unnormalized)
+        const k = (Math.random() - 0.5) * amp * Math.sin(t * Math.PI); // zero at endpoints
+        res.push(x + nx * k * 0.01, y + ny * k * 0.01)
+    }
+    return res
+}
+const fl = (x: number, y: number, ax: number, ay: number) => {
+    return fracture({ x, y }, { x: ax, y: ay })
+}
+
+class PatrolRegion {
+    polygon?: Polygon
+
+}
+
+class Unicorn {
+    polygon: Polygon
+
+    constructor() {
+        let a = Polygon.model([0, 10, 100, 0, 120, 50, 100, 100, 0, 90, -10, 50])
+        a.x = 320
+        a.y = 180
+        a.scale = 0.2
+        a.off_x = -50
+        a.off_y = -50
+        a.color = Colors.light_cyan
+
+
+        this.polygon = a
+    }
+
+    update(dt: number) {
+
+    }
+}
+
 class Game {
+
+    unicorn: Unicorn
+    patrolRegion: PatrolRegion
 
     show_end_menu = false
     enable_reset = 0
 
     camera: Camera
-    cameraZones: CameraZones
 
     cursor: Cursor
     cParticles: CursorParticles
@@ -195,26 +196,18 @@ class Game {
     dragArea?: DrawArea
 
     constructor() {
+        this.unicorn = new Unicorn()
+        this.patrolRegion = new PatrolRegion()
         this.cParticles = new CursorParticles()
         this.cursor = new Cursor()
         this.camera = new Camera(640, 360)
-        this.cameraZones = new CameraZones()
 
-        this.camera.panCenter(
-            this.cameraZones.arcade.body.x,
-            this.cameraZones.arcade.body.y,
-        )
+        this.camera.panCenter(0, 0)
     }
 
     update(dt: number) {
-        this.cameraZones.followDeadzone(0, 0)
 
-        this.cameraZones.update(dt)
-
-        this.camera.lerpPanCenter(
-            this.cameraZones.arcade.body.x,
-            this.cameraZones.arcade.body.y,
-        )
+        this.camera.lerpPanCenter(0, 0)
 
 
         this.camera.update(dt)
@@ -233,6 +226,12 @@ class Game {
         }
 
         if (mouse.is_just_up) {
+
+            if (this.dragArea) {
+                this.patrolRegion.polygon = this.dragArea.polygon
+                this.patrolRegion.polygon.color = Colors.dark_blue
+            }
+
             this.dragArea = undefined
         }
 
@@ -581,14 +580,6 @@ function drawPolygon(polygon: Polygon) {
     }
 }
 
-let a = Polygon.model([0, 10, 100, 0, 120, 50, 100, 100, 0, 90, -10, 50])
-a.x = 320
-a.y = 180
-a.scale = 0.2
-a.off_x = -50
-a.off_y = -50
-a.color = Colors.light_cyan
-
 export function _render() {
     if (!first_update_called) return
 
@@ -597,8 +588,11 @@ export function _render() {
     // background
     lb.drawLine(0, 180, 640, 180, 640, Colors.dark_green)
 
+    drawPolygon(game.unicorn.polygon)
 
-    drawPolygon(a)
+    if (game.patrolRegion.polygon) {
+        drawPolygon(game.patrolRegion.polygon)
+    }
 
 
     if (game.dragArea) {
