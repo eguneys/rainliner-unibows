@@ -221,6 +221,214 @@ export function _update(dt: number) {
     audio.update(dt)
 }
 
+interface IPolygon {
+    color: Color
+    width: number
+    dashed: boolean
+    vertices: number[]
+}
+
+class Polygon implements IPolygon {
+
+    static Copy(a: Polygon) {
+        let res = new Polygon(a.model_vertices)
+
+        res.color = a.color
+        res.dashed = a.dashed
+        res.scale = a.scale
+        res.theta = a.theta
+        res.x = a.x
+        res.y = a.y
+        return res
+    }
+
+    static model(model: number[]) {
+        let res = new Polygon(model)
+        res.dashed = false
+        return res
+    }
+
+    static triangle(size: number) {
+        const vv: number[] = [];
+        let angles = [-90, -210, -330]
+        for (const angle of angles) {
+            const radians = angle * Math.PI / 180
+            vv.push(Math.cos(radians) * size / 2, Math.sin(radians) * size / 2);
+        }
+        let res = new Polygon(vv);
+        res.dashed = false
+        return res
+    }
+
+    static circle(radius: number) {
+        const segments = Math.max(8, Math.round(2 * Math.PI * radius / 8));
+        const res: number[] = [];
+        for (let i = 0; i < segments; i++) {
+            const t = (i / segments) * 2 * Math.PI;
+            res.push(Math.cos(t) * radius, Math.sin(t) * radius);
+        }
+        return new Polygon(res);
+    }
+
+
+    static rect(minX: number, minY: number, maxX: number, maxY: number, segmentsPerEdge = 4) {
+        const corners: { x: number, y: number }[] = [
+            { x: minX, y: minY },
+            { x: maxX, y: minY },
+            { x: maxX, y: maxY },
+            { x: minX, y: maxY },
+        ];
+
+        const pts: number[] = [];
+        for (let i = 0; i < 4; i++) {
+            const a = corners[i];
+            const b = corners[(i + 1) % 4];
+            for (let s = 0; s < segmentsPerEdge; s++) {
+                const t = s / segmentsPerEdge;
+                pts.push(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+            }
+        }
+        return new Polygon(pts);
+    }
+
+    x = 0
+    y = 0
+    theta = 0
+    scale = 1
+
+    width = 1.5
+    color = Colors.light_yellow
+    dashed = true
+
+    cx: number
+    cy: number
+    result: number[]
+
+
+    constructor(readonly model_vertices: number[]) {
+        const n = this.model_vertices.length / 2;
+        let cx = 0, cy = 0;
+        for (let i = 0; i < n; i++) {
+            cx += this.model_vertices[i * 2];
+            cy += this.model_vertices[i * 2 + 1];
+        }
+        cx /= n; cy /= n;
+
+        this.cx = cx
+        this.cy = cy
+
+        this.result = model_vertices.map(_ => 0)
+    }
+
+    get vertices() {
+        const n = this.model_vertices.length / 2;
+        const cos = Math.cos(this.theta);
+        const sin = Math.sin(this.theta);
+
+        for (let i = 0; i < n; i++) {
+            const dx = (this.model_vertices[i * 2] - this.cx) * this.scale;
+            const dy = (this.model_vertices[i * 2 + 1] - this.cy) * this.scale;
+
+            this.result[i * 2] = this.x + this.cx + dx * cos - dy * sin
+            this.result[i * 2 + 1] = this.y + this.cy + dx * sin + dy * cos
+        }
+        return this.result;
+    }
+}
+
+
+class MorphPoly implements IPolygon {
+
+    private b: Polygon
+
+    i_duration = 0
+    duration = 0
+
+    get t() {
+        if (this.duration === 0) return 1
+        return this.i_duration / this.duration
+    }
+
+    _polygon: Polygon
+
+    constructor(public a: Polygon) {
+        this.b = Polygon.Copy(a)
+
+        this._polygon = Polygon.Copy(a)
+    }
+
+    morphTo(morph: (b: Polygon) => Polygon, duration: number) {
+        let new_a = new Polygon(this.vertices)
+
+        new_a.dashed = this.a.dashed
+        new_a.color = this.a.color
+
+        this.a = new_a
+        this.b = morph(this.b)
+
+        if (this.a.model_vertices.length !== this.b.model_vertices.length) {
+            throw 'Incompatible Morph Target'
+        }
+
+        this.i_duration = 0
+        this.duration = duration
+    }
+
+    update(dt: number) {
+        this.i_duration = Math.min(this.duration, this.i_duration + dt)
+    }
+
+    get color() {
+        return Color.lerp(this.a.color, this.b.color, this.t)
+    }
+
+    get width() {
+        return lerp(this.a.width, this.b.width, this.t)
+    }
+
+    get dashed() {
+        return this.t < 0.5 ? this.a.dashed : this.b.dashed
+    }
+
+    get vertices() {
+        if (this.t === 1) {
+            return this.b.vertices
+        }
+
+        let vA = this.a.vertices
+        let vB = this.b.vertices
+
+        return vA.map((vA, i) => lerp(vA, vB[i], this.t))
+    }
+}
+
+
+function drawPolygon(polygon: IPolygon) {
+    let { width, color, dashed } = polygon
+    let { vertices } = polygon
+    for (let i = 0; i < vertices.length - 2; i += dashed ? 4 : 2) {
+
+        let x1 = vertices[i]
+        let y1 = vertices[i + 1]
+
+        let x2 = vertices[i + 2]
+        let y2 = vertices[i + 3]
+
+        lb.drawLine(x1, y1, x2, y2, width, color)
+    }
+    if (!dashed)
+        lb.drawLine(vertices[0], vertices[1], vertices[vertices.length - 2], vertices[vertices.length - 1], width, color)
+}
+
+let a = Polygon.model([0, 10, 100, 0, 120, 50, 100, 100, 0, 90, -10, 50])
+a.x = 100
+a.y = 100
+a.color = Colors.dark_blue
+
+let b = Polygon.model([0, 10, 100, 0, 120, 50, 100, 100, 0, 90, 10, 50])
+b.x = 100
+b.y = 100
+b.theta = Math.PI * 0.5
 
 export function _render() {
     if (!first_update_called) return
@@ -230,9 +438,8 @@ export function _render() {
     // background
     lb.drawLine(0, 180, 640, 180, 640, Colors.dark_green)
 
-    lb.drawLine(0, 0, 100, 100, 1, Colors.dark_red)
-    lb.drawLine(100, 100, 200, 200, 1, Colors.light_cyan)
-    lb.drawLine(204, 100, 200, 200, 2, Colors.light_yellow)
+
+    drawPolygon(b)
 
     lb.endDraw()
 
