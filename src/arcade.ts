@@ -1,73 +1,97 @@
-import type { Box } from "./collision"
+import { box_contains, box_max, box_min, type Box } from "./collision"
 import type { ActionSign } from "./keyboard"
 
+export class Vec2 {
+    static get Zero() { return new Vec2(0, 0) }
+
+    static fromXy(a: { x: number, y: number }) { return new Vec2(a.x, a.y) }
+
+    constructor(public x: number, public y: number) { }
+
+    sub(a: Vec2) {
+        return new Vec2(this.x - a.x, this.y - a.y)
+    }
+
+    add(a: Vec2) {
+        return new Vec2(this.x + a.x, this.y + a.y)
+    }
+
+    scale(n: number) {
+        return new Vec2(this.x * n, this.y * n)
+    }
+
+    normalize() {
+        return this.scale(1 / this.length())
+    }
+
+    length() {
+        return Math.sqrt(this.x * this.x + this.y * this.y)
+    }
+
+    clampLength(min: number, max: number): Vec2 {
+        const len = this.length()
+        if (len < 1e-6) return this
+        const clamped = Math.max(min, Math.min(max, len))
+        return this.scale(clamped / len)
+    }
+
+    angle() {
+        return Math.atan2(this.y, this.x)
+    }
+}
+
 export class PositionVelocity {
+    position = Vec2.Zero
+    velocity = Vec2.Zero
+    acceleration = Vec2.Zero
 
-    x = 0
-    y = 0
-
-    vhs: Sign = 0
-    vh = 0
-
-    vv = 0
-    vvs: Sign = 0
-
-    ahs: Sign = 0
-    ah = 0
-
-    avs: Sign = 0
-    av = 0
-
-    minSpeedV = 0
-    maxSpeedV = 0
-
-    minAccelV = 0
-    maxAccelV = 0
-
-    minSpeedH = 0
-    maxSpeedH = 0
-
-    minAccelH = 0
-    maxAccelH = 0
-
-
-    boostAh = 0
-
-    private vertical_updates(dt: number) {
-        let dtSec = dt * 0.001
-
-        this.av = Math.max(this.minAccelV, Math.min(this.maxAccelV, this.av))
-
-        this.vv += this.avs * this.av * dtSec
-
-        this.vv = Math.max(this.minSpeedV, Math.min(this.maxSpeedV, this.vv))
-
-        this.y += this.vvs * this.vv * dtSec
-    }
-
-    private horizontal_updates(dt: number) {
-        let dtSec = dt * 0.001
-
-        this.ah = Math.max(this.minAccelH, Math.min(this.maxAccelH, this.ah))
-
-        this.vh += this.ahs * this.ah * dtSec
-
-        this.vh = Math.max(this.minSpeedH, Math.min(this.maxSpeedH, this.vh))
-
-        this.x += this.vhs * this.vh * dtSec
-    }
-
+    minSpeed!: number
+    maxSpeed!: number
+    minAccel!: number
+    maxAccel!: number
 
     update(dt: number) {
-        this.horizontal_updates(dt)
-        this.vertical_updates(dt)
+        let dtSec = dt * 0.001
 
-        this.boostAh = Math.max(0, this.boostAh - dt)
+        this.acceleration = this.acceleration.clampLength(this.minAccel, this.maxAccel)
 
-        if (this.boostAh > 0) {
-            let boost = 10
-            this.ah += boost
+
+        const oldSpeed = this.velocity.length()
+        let newVelocity = this.velocity.add(this.acceleration.scale(dtSec))
+        const newSpeed = newVelocity.length()
+
+        if (newSpeed < this.minSpeed) {
+            if (newSpeed >= oldSpeed) {
+                // accelerating up from rest -> snap to floor instead of crawling from 0
+                const dir = newSpeed > 1e-6 ? newVelocity.normalize() : heading(this.acceleration)
+                newVelocity = dir.scale(this.minSpeed)
+            }
+            // else: decelerating toward 0 -> let it pass through, no floor
         }
+
+        this.velocity = newVelocity.clampLength(0, this.maxSpeed)
+
+
+        this.position = this.position.add(this.velocity.scale(dtSec))
+    }
+
+    steer(desired: Vec2) {
+        this.acceleration = desired.sub(this.velocity)
+    }
+}
+
+interface SteeringBehavior {
+    compute(): Vec2  // returns a desired accel/velocity contribution, doesn't touch body
+}
+
+export class CombinedSteering implements PositionBehavior {
+    constructor(public body: PositionVelocity, public behaviors: [SteeringBehavior, number][]) { }
+    update(dt: number) {
+        const total = this.behaviors.reduce(
+            (sum, [b, w]) => sum.add(b.compute().scale(w)), Vec2.Zero
+        )
+        this.body.steer(total)
+        this.body.update(dt)
     }
 }
 
@@ -76,6 +100,89 @@ export interface PositionBehavior {
     update(dt: number): void
 }
 
+
+
+class Seek implements SteeringBehavior {
+    constructor(public body: PositionVelocity, public target: Vec2) { }
+    compute(): Vec2 {
+        const desired = this.target.sub(this.body.position).normalize().scale(this.body.maxSpeed)
+        return desired.sub(this.body.velocity)
+    }
+}
+
+export class Flee implements SteeringBehavior {
+    constructor(public body: PositionVelocity, public target: Vec2) { }
+    compute(): Vec2 {
+        const desired = this.body.position.sub(this.target).normalize().scale(this.body.maxSpeed)
+        return desired.sub(this.body.velocity)
+    }
+}
+
+export class Arrive implements SteeringBehavior {
+    constructor(public body: PositionVelocity, public target: Vec2, public slowRadius: number) { }
+    compute(): Vec2 {
+        const offset = this.target.sub(this.body.position)
+        const dist = offset.length()
+        const speed = this.body.maxSpeed * Math.min(1, dist / this.slowRadius)
+        const desired = dist > 1e-6 ? offset.scale(speed / dist) : Vec2.Zero
+        return desired.sub(this.body.velocity)
+    }
+}
+
+export class Pursue implements SteeringBehavior {
+    constructor(public body: PositionVelocity, public target: PositionVelocity, public predictTime = 0.5) { }
+    compute(): Vec2 {
+        const futurePos = this.target.position.add(this.target.velocity.scale(this.predictTime))
+        return new Seek(this.body, futurePos).compute()
+    }
+}
+
+export class Evade implements SteeringBehavior {
+    constructor(public body: PositionVelocity, public target: PositionVelocity, public predictTime = 0.5) { }
+    compute(): Vec2 {
+        const futurePos = this.target.position.add(this.target.velocity.scale(this.predictTime))
+        return new Flee(this.body, futurePos).compute()
+    }
+}
+
+
+export function heading(v: Vec2): Vec2 {
+    return v.length() > 1e-6 ? v.normalize() : Vec2.Zero
+}
+
+export function side(v: Vec2): Vec2 {
+    const h = heading(v)
+    return new Vec2(-h.y, h.x)  // 90° rotation (left-hand side)
+}
+
+export class Wander implements SteeringBehavior {
+    private wanderAngle = 0
+    constructor(public body: PositionVelocity, public radius = 2, public distance = 5, public jitter = 0.3) { }
+    compute(): Vec2 {
+        this.wanderAngle += (Math.random() - 0.5) * this.jitter
+        const h = heading(this.body.velocity)
+        const s = side(this.body.velocity)
+        const circleCenter = h.scale(this.distance)
+        const displacement = h.scale(Math.cos(this.wanderAngle)).add(s.scale(Math.sin(this.wanderAngle))).scale(this.radius)
+        return circleCenter.add(displacement)
+    }
+}
+
+
+export class ContainWithinBox implements SteeringBehavior {
+    constructor(public body: PositionVelocity, public box: Box, public margin = 20) { }
+    compute(): Vec2 {
+        let min = box_min(this.box)
+        let max = box_max(this.box)
+        const p = this.body.position
+        let force = Vec2.Zero
+        if (p.x < min.x + this.margin) force.x = this.body.maxAccel
+        if (p.x > max.x - this.margin) force.x = -this.body.maxAccel
+        if (p.y < min.y + this.margin) force.y = this.body.maxAccel
+        if (p.y > max.y - this.margin) force.y = -this.body.maxAccel
+        return force
+    }
+}
 
 export type Sign = 1 | -1 | 0
 export const epsilon = 0.5
@@ -137,25 +244,35 @@ export function resolve_manifold(a: { x: number, y: number }, manifold: Manifold
 
 export type ArcadePlayerState = 'fall' | 'landed' | 'landed2' | 'jumping' | 'idle' | 'jump'
 export class ArcadePlayer implements PositionBehavior {
-    static create = () => {
-        let res = new ArcadePlayer()
 
-        res.body.minAccelH = 100
-        res.body.maxAccelH = 500
-        res.body.minSpeedH = 270
-        res.body.maxSpeedH = 700
+    combined_steering: CombinedSteering
 
-        res.body.minAccelV = 1700
-        res.body.maxAccelV = 5000
-        res.body.minSpeedV = 270
-        res.body.maxSpeedV = 730
+    seek: Seek
+    wander: Wander
+    contain: ContainWithinBox
+    behaviors: [SteeringBehavior, number][]
+
+    static create = (x: number, y: number, seek_target: Vec2, contain: Box) => {
+        let body = new PositionVelocity()
+        body.position.x = x
+        body.position.y = y
+        let res = new ArcadePlayer(body, seek_target, contain)
+
+        res.body.minAccel = 100
+        res.body.maxAccel = 6000
+        res.body.minSpeed = 60
+        res.body.maxSpeed = 700
 
         return res
     }
 
-    private constructor() { }
-
-    body: PositionVelocity = new PositionVelocity()
+    private constructor(public body: PositionVelocity, seek_target: Vec2, contain: Box) {
+        this.seek = new Seek(body, seek_target)
+        this.wander = new Wander(body, 1, 7, 100)
+        this.contain = new ContainWithinBox(body, contain, 1)
+        this.behaviors = []
+        this.combined_steering = new CombinedSteering(body, this.behaviors)
+    }
 
     butt!: ArcadePlayerButtonSigns
 
@@ -166,73 +283,19 @@ export class ArcadePlayer implements PositionBehavior {
     jump_buffer = 0
 
     private stateUpdates() {
-
-        if (this.butt.req_jump === 'just-down') {
-            this.jump_buffer = 200
+        this.behaviors.length = 0
+        if (box_contains(this.contain.box, this.seek.target)) {
+            console.log(this.contain.box, this.seek.target)
+            this.behaviors.push([this.seek, 1])
         }
-
-
-
-        switch (this.state) {
-            case 'idle': {
-                this.body.ahs = 0
-                this.body.vhs = 0
-            } break
-            case 'fall': {
-                this.body.vvs = 1
-                this.body.avs = 1
-            } break
-            case 'landed': {
-                this.body.vvs = 0
-                this.body.vh -= 30
-                this.body.ahs = 1
-                this.state = 'landed2'
-            } break
-            case 'landed2': {
-                if (this.jump_buffer > 0) {
-                    this.jump_buffer = 0
-                    this.state = 'jump'
-
-                }
-            } break
-            case 'jump': {
-                this.body.vv = this.body.maxSpeedV
-                this.body.vvs = -1
-                this.body.avs = -1
-                this.state = 'jumping'
-            } break
-            case 'jumping': {
-
-            }
-        }
-
-        if (this.coll.box.colliding) {
-            resolve_manifold(this.body, this.coll.box)
-            if (this.state === 'fall') {
-                if (this.coll.box.ny !== 0) {
-                    this.state = 'landed'
-                }
-            }
-        } else {
-            if (!this.coll.down.colliding) {
-                if (this.state === 'jumping') {
-                    if (this.body.vv - this.body.minSpeedV < epsilon) {
-                        this.state = 'fall'
-                    }
-                } else {
-                    this.state = 'fall'
-                }
-            }
-        }
+        this.behaviors.push([this.wander, 1])
+        this.behaviors.push([this.contain, 5])
     }
 
 
     update(dt: number) {
-
-        this.jump_buffer = Math.max(0, this.jump_buffer - dt)
-
         this.stateUpdates()
-        this.body.update(dt)
+        this.combined_steering.update(dt)
     }
 
 }
@@ -247,15 +310,10 @@ export class ArcadeCameraCruise implements PositionBehavior {
     static create = () => {
         let res = new ArcadeCameraCruise()
 
-        res.body.minAccelH = 2300
-        res.body.maxAccelH = 5000
-        res.body.minSpeedH = 570
-        res.body.maxSpeedH = 1830
-
-        res.body.minAccelV = 700
-        res.body.maxAccelV = 500
-        res.body.minSpeedV = 270
-        res.body.maxSpeedV = 430
+        res.body.minAccel = 2300
+        res.body.maxAccel = 5000
+        res.body.minSpeed = 570
+        res.body.maxSpeed = 1830
 
         return res
     }
@@ -267,11 +325,6 @@ export class ArcadeCameraCruise implements PositionBehavior {
     deadzones!: ArcadeDeadzones
 
     stateUpdates() {
-        this.body.vhs = this.deadzones.horizontal
-        this.body.ahs = this.deadzones.horizontal
-
-        this.body.vvs = this.deadzones.vertical
-        this.body.avs = this.deadzones.vertical
     }
 
     update(dt: number) {

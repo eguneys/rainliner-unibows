@@ -1,5 +1,6 @@
+import { ArcadePlayer, side, Vec2 } from "./arcade";
 import { AudioPlayer } from "./audioplayer";
-import { type Box } from "./collision"
+import { box_area, type Box } from "./collision"
 import { Keyboard } from "./keyboard";
 import { Mouse } from "./mouse";
 import { Camera2D } from "./webgl/camera2d";
@@ -139,28 +140,22 @@ class CursorParticles {
 
 }
 
-const fracture = (a: Pt, b: Pt, n = 7, amp = 13) => {
-    let res = []
-    for (let i = 0; i < n + 1; i++) {
-        const t = i / n;
-        const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
-        const nx = -(b.y - a.y), ny = (b.x - a.x); // perpendicular (unnormalized)
-        const k = (Math.random() - 0.5) * amp * Math.sin(t * Math.PI); // zero at endpoints
-        res.push(x + nx * k * 0.01, y + ny * k * 0.01)
-    }
-    return res
-}
-const fl = (x: number, y: number, ax: number, ay: number) => {
-    return fracture({ x, y }, { x: ax, y: ay })
-}
-
 class PatrolRegion {
-    polygon?: Polygon
+    polygon: Polygon
+    constructor(readonly box: Box) {
+        this.polygon = Polygon.rect(box.x, box.y, box.x + box.w, box.y + box.h, 16)
 
+        this.polygon.width = 1
+        this.polygon.spacing = 32
+        this.polygon.color = Colors.light_blue
+    }
 }
 
 class Unicorn {
     polygon: Polygon
+    seek_target = new Vec2(400, 190)
+    contain = { x: 300, y: 100, w: 300, h: 300 }
+    arcade = ArcadePlayer.create(320, 180, this.seek_target, this.contain)
 
     constructor() {
         let a = Polygon.model([0, 10, 100, 0, 120, 50, 100, 100, 0, 90, -10, 50])
@@ -176,14 +171,18 @@ class Unicorn {
     }
 
     update(dt: number) {
+        this.arcade.update(dt)
 
+        this.polygon.theta = -Math.PI * 0.5 + side(this.arcade.body.velocity).angle()
+        this.polygon.x = this.arcade.body.position.x
+        this.polygon.y = this.arcade.body.position.y
     }
 }
 
 class Game {
 
     unicorn: Unicorn
-    patrolRegion: PatrolRegion
+    patrolRegion?: PatrolRegion
 
     show_end_menu = false
     enable_reset = 0
@@ -197,7 +196,6 @@ class Game {
 
     constructor() {
         this.unicorn = new Unicorn()
-        this.patrolRegion = new PatrolRegion()
         this.cParticles = new CursorParticles()
         this.cursor = new Cursor()
         this.camera = new Camera(640, 360)
@@ -212,6 +210,7 @@ class Game {
 
         this.camera.update(dt)
 
+        this.unicorn.update(dt)
 
         this.cursor.update(dt)
         this.cursor.x = mouse.is_hovering.x
@@ -228,8 +227,7 @@ class Game {
         if (mouse.is_just_up) {
 
             if (this.dragArea) {
-                this.patrolRegion.polygon = this.dragArea.polygon
-                this.patrolRegion.polygon.color = Colors.dark_blue
+                this.patrolRegion = this.dragArea.patrolRegion
             }
 
             this.dragArea = undefined
@@ -238,6 +236,22 @@ class Game {
         if (this.dragArea) {
             this.dragArea.x2 = this.cursor.x
             this.dragArea.y2 = this.cursor.y
+        }
+
+        this.unicorn.seek_target.x = this.cursor.x
+        this.unicorn.seek_target.y = this.cursor.y
+
+        if (this.patrolRegion) {
+            let box = this.patrolRegion.box
+            this.unicorn.contain.x = box.x
+            this.unicorn.contain.y = box.y
+            this.unicorn.contain.w = box.w
+            this.unicorn.contain.h = box.h
+        } else {
+            this.unicorn.contain.x = 0
+            this.unicorn.contain.y = 0
+            this.unicorn.contain.w = 640
+            this.unicorn.contain.h = 360
         }
 
         this.cParticles.update(dt)
@@ -452,7 +466,9 @@ export function fillPolygon(verts: Pt[], angle: number, spacing: number) {
     const minY = Math.min(...rotated.map(v => v.y));
     const maxY = Math.max(...rotated.map(v => v.y));
 
-    const start = Math.floor(minY / spacing) * spacing
+    const gridOffset = minY - Math.floor(minY / spacing) * spacing;
+    const scrollOffset = (t * 0.02) % spacing;
+    const start = minY - gridOffset + scrollOffset;
     let res = []
     for (let y = start; y <= maxY; y += spacing) {
         const xs = scanlineXs(rotated, y);
@@ -503,13 +519,28 @@ class CursorParticle {
 }
 
 class DrawArea {
-
+    get box() {
+        let box = { x: Math.min(this.x, this.x2), y: Math.min(this.y, this.y2), w: Math.abs(this.x2 - this.x), h: Math.abs(this.y - this.y2) }
+        return box
+    }
 
     get polygon() {
-        let res = Polygon.rect(this.x, this.y, this.x2, this.y2, 16)
-        res.width = 1
-        res.spacing = 32
+        let box = this.box
+        let polygon = Polygon.rect(this.x, this.y, this.x2, this.y2, 16)
+        polygon.width = 1
+        polygon.spacing = 32
+        if (box_area(box) < 10000) {
+            polygon.color = Colors.light_red
+        }
+        return polygon
+    }
 
+    get patrolRegion() {
+        let box = this.box
+        if (box_area(box) < 10000) {
+            return undefined
+        }
+        let res = new PatrolRegion(box)
         return res
     }
 
@@ -590,7 +621,7 @@ export function _render() {
 
     drawPolygon(game.unicorn.polygon)
 
-    if (game.patrolRegion.polygon) {
+    if (game.patrolRegion) {
         drawPolygon(game.patrolRegion.polygon)
     }
 

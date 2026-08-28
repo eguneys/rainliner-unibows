@@ -1,4 +1,9 @@
 export type Box = { x: number, y: number, w: number, h: number }
+
+export function box_contains(a: Box, b: Vec2) {
+    return box_intersects(a, { x: b.x, y: b.y, w: 1, h: 1 })
+}
+
 export function box_intersects(a: Box, b: Box) {
     return a.x < b.x + b.w &&
         a.x + a.w > b.x &&
@@ -27,6 +32,12 @@ export function box_intersectsRegion(a: Box, b: Box) {
     }
 }
 
+export function box_min(a: Box) {
+    return { x: a.x, y: a.y }
+}
+export function box_max(a: Box) {
+    return { x: a.x + a.w, y: a.y + a.h }
+}
 
 export function box_union(a: Box, b: Box) {
     let left_most = Math.min(a.x, b.x)
