@@ -2,6 +2,7 @@ import { ArcadeCameraCruise } from "./arcade";
 import { AudioPlayer } from "./audioplayer";
 import { type Box, type Sign } from "./collision"
 import { Keyboard } from "./keyboard";
+import { Mouse } from "./mouse";
 import { Camera2D } from "./webgl/camera2d";
 import { Color } from "./webgl/color";
 import { LineBatch } from "./webgl/linebatch";
@@ -155,6 +156,31 @@ export class CameraZones {
     }
 }
 
+class CursorParticles {
+    particles: CursorParticle[] = []
+
+    cool = 0
+
+    push() {
+        if (this.cool === 0) {
+            this.cool = 60 + Math.random() * 100
+            for (let i = 0; i < Math.sin(t * 0.01) * 4 + Math.random() * 2; i++) {
+                this.particles.push(new CursorParticle(10 + Math.random() * 10, 1))
+            }
+        }
+    }
+
+    update(dt: number) {
+        for (let p of this.particles) {
+            p.update(dt)
+        }
+
+        this.particles = this.particles.filter(p => p.life > 0)
+        this.cool = Math.max(0, this.cool - dt)
+    }
+
+}
+
 class Game {
 
     show_end_menu = false
@@ -163,8 +189,14 @@ class Game {
     camera: Camera
     cameraZones: CameraZones
 
+    cursor: Cursor
+    cParticles: CursorParticles
+
+    dragArea?: DrawArea
 
     constructor() {
+        this.cParticles = new CursorParticles()
+        this.cursor = new Cursor()
         this.camera = new Camera(640, 360)
         this.cameraZones = new CameraZones()
 
@@ -186,6 +218,30 @@ class Game {
 
 
         this.camera.update(dt)
+
+
+        this.cursor.update(dt)
+        this.cursor.x = mouse.is_hovering.x
+        this.cursor.y = mouse.is_hovering.y
+
+        if (this.cursor.is_hovering) {
+            this.cParticles.push()
+        }
+
+        if (mouse.is_just_down) {
+            this.dragArea = new DrawArea(this.cursor.x, this.cursor.y)
+        }
+
+        if (mouse.is_just_up) {
+            this.dragArea = undefined
+        }
+
+        if (this.dragArea) {
+            this.dragArea.x2 = this.cursor.x
+            this.dragArea.y2 = this.cursor.y
+        }
+
+        this.cParticles.update(dt)
     }
 
 }
@@ -217,18 +273,12 @@ export function _update(dt: number) {
 
     game.update(dt)
 
+    mouse.update()
     keyboard.update()
     audio.update(dt)
 }
 
-interface IPolygon {
-    color: Color
-    width: number
-    dashed: boolean
-    vertices: number[]
-}
-
-class Polygon implements IPolygon {
+class Polygon {
 
     static Copy(a: Polygon) {
         let res = new Polygon(a.model_vertices)
@@ -260,37 +310,50 @@ class Polygon implements IPolygon {
         return res
     }
 
-    static circle(radius: number) {
-        const segments = Math.max(8, Math.round(2 * Math.PI * radius / 8));
+    static circle(radius: number, segments?: number) {
+        const _segments = segments ?? Math.max(8, Math.round(2 * Math.PI * radius / 8));
         const res: number[] = [];
-        for (let i = 0; i < segments; i++) {
-            const t = (i / segments) * 2 * Math.PI;
+        for (let i = 0; i < _segments; i++) {
+            const t = (i / _segments) * 2 * Math.PI;
             res.push(Math.cos(t) * radius, Math.sin(t) * radius);
         }
         return new Polygon(res);
     }
 
 
-    static rect(minX: number, minY: number, maxX: number, maxY: number, segmentsPerEdge = 4) {
-        const corners: { x: number, y: number }[] = [
-            { x: minX, y: minY },
-            { x: maxX, y: minY },
-            { x: maxX, y: maxY },
-            { x: minX, y: maxY },
-        ];
-
+    static rect(minX: number, minY: number, maxX: number, maxY: number, step = 13) {
         const pts: number[] = [];
-        for (let i = 0; i < 4; i++) {
-            const a = corners[i];
-            const b = corners[(i + 1) % 4];
-            for (let s = 0; s < segmentsPerEdge; s++) {
-                const t = s / segmentsPerEdge;
-                pts.push(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+
+        const addEdge = (x0: number, y0: number, x1: number, y1: number) => {
+            pts.push(x0, y0);
+            const dir = (x0 === x1) ? Math.sign(y1 - y0) : Math.sign(x1 - x0);
+            const lo = Math.min(x0 === x1 ? y0 : x0, x0 === x1 ? y1 : x1);
+            const hi = Math.max(x0 === x1 ? y0 : x0, x0 === x1 ? y1 : x1);
+
+            if (x0 === x1) { // vertical
+                const first = dir > 0 ? Math.ceil(lo / step) * step : Math.floor(hi / step) * step;
+                for (let y = first; dir > 0 ? y < hi : y > lo; y += dir * step) {
+                    if (y !== y0) pts.push(x0, y);
+                }
+            } else { // horizontal
+                const first = dir > 0 ? Math.ceil(lo / step) * step : Math.floor(hi / step) * step;
+                for (let x = first; dir > 0 ? x < hi : x > lo; x += dir * step) {
+                    if (x !== x0) pts.push(x, y0);
+                }
             }
-        }
+        };
+
+        addEdge(minX, minY, maxX, minY); // top
+        addEdge(maxX, minY, maxX, maxY); // right
+        addEdge(maxX, maxY, minX, maxY); // bottom
+        addEdge(minX, maxY, minX, minY); // left
+
         return new Polygon(pts);
     }
 
+
+    off_x = 0
+    off_y = 0
     x = 0
     y = 0
     theta = 0
@@ -304,6 +367,7 @@ class Polygon implements IPolygon {
     cy: number
     result: number[]
 
+    spacing = 1
 
     constructor(readonly model_vertices: number[]) {
         const n = this.model_vertices.length / 2;
@@ -329,106 +393,201 @@ class Polygon implements IPolygon {
             const dx = (this.model_vertices[i * 2] - this.cx) * this.scale;
             const dy = (this.model_vertices[i * 2 + 1] - this.cy) * this.scale;
 
-            this.result[i * 2] = this.x + this.cx + dx * cos - dy * sin
-            this.result[i * 2 + 1] = this.y + this.cy + dx * sin + dy * cos
+            this.result[i * 2] = this.off_x + this.x + this.cx + dx * cos - dy * sin
+            this.result[i * 2 + 1] = this.off_y + this.y + this.cy + dx * sin + dy * cos
         }
         return this.result;
     }
+
+    get ptVertices() {
+        let res = []
+        let vv = this.vertices
+        for (let i = 0; i < vv.length; i += 2) {
+            res[i / 2] = { x: vv[i], y: vv[i + 1] }
+        }
+        return res
+    }
+
+    get ptFillVertices() {
+        return fillPolygon(this.ptVertices, 1, this.spacing)
+    }
 }
 
 
-class MorphPoly implements IPolygon {
+type Pt = { x: number; y: number };
 
-    private b: Polygon
+export function rotate(p: Pt, angle: number): Pt {
+    const c = Math.cos(angle), s = Math.sin(angle);
+    return { x: p.x * c - p.y * s, y: p.x * s + p.y * c };
+}
 
-    i_duration = 0
-    duration = 0
-
-    get t() {
-        if (this.duration === 0) return 1
-        return this.i_duration / this.duration
-    }
-
-    _polygon: Polygon
-
-    constructor(public a: Polygon) {
-        this.b = Polygon.Copy(a)
-
-        this._polygon = Polygon.Copy(a)
-    }
-
-    morphTo(morph: (b: Polygon) => Polygon, duration: number) {
-        let new_a = new Polygon(this.vertices)
-
-        new_a.dashed = this.a.dashed
-        new_a.color = this.a.color
-
-        this.a = new_a
-        this.b = morph(this.b)
-
-        if (this.a.model_vertices.length !== this.b.model_vertices.length) {
-            throw 'Incompatible Morph Target'
+// x-intersections of a horizontal line y=scanY with all polygon edges
+export function scanlineXs(verts: Pt[], scanY: number): number[] {
+    const xs: number[] = [];
+    for (let i = 0; i < verts.length; i++) {
+        const a = verts[i], b = verts[(i + 1) % verts.length];
+        if ((a.y <= scanY && b.y > scanY) || (b.y <= scanY && a.y > scanY)) {
+            const t = (scanY - a.y) / (b.y - a.y);
+            xs.push(a.x + t * (b.x - a.x));
         }
-
-        this.i_duration = 0
-        this.duration = duration
     }
+    return xs.sort((a, b) => a - b);
+}
+
+const makeConstantRandom = () => {
+    let res = []
+
+    for (let i = 0; i < 1000; i++) {
+        res[i] = (Math.PI * i) % 1
+    }
+
+    return (i: number) => {
+        return res[Math.floor(i)]
+    }
+}
+
+export const ConstantRandom = makeConstantRandom()
+
+export function fillPolygon(verts: Pt[], angle: number, spacing: number) {
+    const rotated = verts.map(v => rotate(v, -angle));
+    const minY = Math.min(...rotated.map(v => v.y));
+    const maxY = Math.max(...rotated.map(v => v.y));
+
+    const start = Math.floor(minY / spacing) * spacing
+    let res = []
+    for (let y = start; y <= maxY; y += spacing) {
+        const xs = scanlineXs(rotated, y);
+        for (let i = 0; i + 1 < xs.length; i += 2) {
+            const a = rotate({ x: xs[i], y }, angle);
+            const b = rotate({ x: xs[i + 1], y }, angle);
+            res.push(a, b)
+        }
+    }
+    return res
+}
+
+class CursorParticle {
+
+    constructor(radius: number, size: number) {
+        this.size_spring = new Spring(size, size / 2)
+        this.radius_spring = new Spring(radius / 2, radius)
+
+    }
+
+    get x() {
+        return Math.sin(this.direction) * this.radius_spring.position
+    }
+
+    get y() {
+        return Math.cos(this.direction) * this.radius_spring.position
+    }
+
+    get size() {
+        return this.size_spring.position * (this.life / 500)
+    }
+
+    velocity = Math.random() * 5
+
+    direction = Math.random() * Math.PI * 2
+    life = 600 + Math.random() * 100
+    size_spring: Spring
+    radius_spring: Spring
+    theta = 0
 
     update(dt: number) {
-        this.i_duration = Math.min(this.duration, this.i_duration + dt)
-    }
-
-    get color() {
-        return Color.lerp(this.a.color, this.b.color, this.t)
-    }
-
-    get width() {
-        return lerp(this.a.width, this.b.width, this.t)
-    }
-
-    get dashed() {
-        return this.t < 0.5 ? this.a.dashed : this.b.dashed
-    }
-
-    get vertices() {
-        if (this.t === 1) {
-            return this.b.vertices
-        }
-
-        let vA = this.a.vertices
-        let vB = this.b.vertices
-
-        return vA.map((vA, i) => lerp(vA, vB[i], this.t))
+        this.velocity -= Math.random() * 3
+        this.size_spring.update(dt)
+        this.radius_spring.update(dt)
+        this.theta += dt * 0.001 * this.velocity
+        this.life = Math.max(0, this.life - dt)
     }
 }
 
+class DrawArea {
 
-function drawPolygon(polygon: IPolygon) {
+
+    get polygon() {
+        let res = Polygon.rect(this.x, this.y, this.x2, this.y2, 16)
+        res.width = 1
+        res.spacing = 32
+
+        return res
+    }
+
+    constructor(readonly x: number, readonly y: number) {
+        this.x2 = x - 10
+        this.y2 = y - 10
+    }
+
+
+    x2: number
+    y2: number
+}
+
+class Cursor {
+    get box() {
+        return { x: this.x, y: this.y, w: 32, h: 32 }
+    }
+
+    get theta() {
+        return this.theta_spring.position
+    }
+
+    x = 320
+    y = 180
+
+    vx = 0
+    x0 = this.x
+
+    theta_spring = new Spring(0, 0, 800, 2)
+
+    is_hovering = false
+    is_dragging = false
+
+    update(dt: number) {
+        this.vx = this.x - this.x0
+        this.x0 = this.x
+
+        this.theta_spring.velocity = this.vx * 0.3
+
+        this.theta_spring.update(dt)
+    }
+
+}
+
+
+function drawPolygon(polygon: Polygon) {
     let { width, color, dashed } = polygon
     let { vertices } = polygon
-    for (let i = 0; i < vertices.length - 2; i += dashed ? 4 : 2) {
+    const n = vertices.length / 2
+    const step = dashed ? 2 : 1
+    for (let i = 0; i < n; i += step) {
+        const j = (i + 1) % n
+        let x1 = vertices[i * 2]
+        let y1 = vertices[i * 2 + 1]
 
-        let x1 = vertices[i]
-        let y1 = vertices[i + 1]
-
-        let x2 = vertices[i + 2]
-        let y2 = vertices[i + 3]
+        let x2 = vertices[j * 2]
+        let y2 = vertices[j * 2 + 1]
 
         lb.drawLine(x1, y1, x2, y2, width, color)
     }
-    if (!dashed)
-        lb.drawLine(vertices[0], vertices[1], vertices[vertices.length - 2], vertices[vertices.length - 1], width, color)
+
+    let { ptFillVertices } = polygon
+    for (let i = 0; i < ptFillVertices.length; i += 2) {
+        let a = ptFillVertices[i]
+        let b = ptFillVertices[i + 1]
+
+        lb.drawLine(a.x, a.y, b.x, b.y, width, color)
+    }
 }
 
 let a = Polygon.model([0, 10, 100, 0, 120, 50, 100, 100, 0, 90, -10, 50])
-a.x = 100
-a.y = 100
-a.color = Colors.dark_blue
-
-let b = Polygon.model([0, 10, 100, 0, 120, 50, 100, 100, 0, 90, 10, 50])
-b.x = 100
-b.y = 100
-b.theta = Math.PI * 0.5
+a.x = 320
+a.y = 180
+a.scale = 0.2
+a.off_x = -50
+a.off_y = -50
+a.color = Colors.light_cyan
 
 export function _render() {
     if (!first_update_called) return
@@ -439,11 +598,49 @@ export function _render() {
     lb.drawLine(0, 180, 640, 180, 640, Colors.dark_green)
 
 
-    drawPolygon(b)
+    drawPolygon(a)
+
+
+    if (game.dragArea) {
+        drawPolygon(game.dragArea.polygon)
+    }
+
+
+    let theta = game.cursor.theta
+    let x = game.cursor.box.x
+    let y = game.cursor.box.y
+
+    drawCursor(x, y, 4, theta, 3)
+
+    for (let p of game.cParticles.particles) {
+        drawCursor(x + p.x, y + p.y, p.size, p.theta, p.size * 3)
+    }
+
 
     lb.endDraw()
 
     cx.endRender()
+}
+
+function drawCursor(x: number, y: number, radius: number, theta: number, width: number) {
+    let _10 = radius
+    let x1 = x
+    let y1 = y
+    let x2 = x
+    let y2 = y
+
+    let p1 = rotate({ x: -_10, y: -_10 * 0.5 }, theta)
+    let p2 = rotate({ x: _10, y: -_10 * 0.5 }, theta)
+    lb.drawLine(x1 + p1.x, y1 + p1.y, x2 + p2.x, y2 + p2.y, width, Colors.dark_yellow)
+
+    x1 = x
+    y1 = y
+    x2 = x
+    y2 = y
+
+    p1 = rotate({ x: -_10 * 0.5, y: - _10 }, theta)
+    p2 = rotate({ x: -_10 * 0.5, y: _10 }, theta)
+    lb.drawLine(x1 + p1.x, y1 + p1.y, x2 + p2.x, y2 + p2.y, width, Colors.dark_yellow)
 }
 
 let audio: AudioPlayerManager
@@ -460,27 +657,19 @@ export function _set_ctx(ctx: WebGlRenderer) {
     lb = new LineBatch(cx.gl, camera2d)
 }
 
-export function _set_viewport(_top: number, _left: number, width: number, height: number, _clientWidth: number, _clientHeight: number) {
+export function _set_viewport(top: number, left: number, width: number, height: number, clientWidth: number, clientHeight: number) {
     cx.setCanvasBounds(width, height)
+    mouse.set_bounds(top, left, clientWidth, clientHeight, 640, 360)
 }
 
 
+let mouse: Mouse
 let keyboard: Keyboard
 export function _set_canvas(canvas: HTMLCanvasElement) {
     keyboard = Keyboard.bindTo(canvas)
-    keyboard.add_keymapping('w', 'jump')
-    keyboard.add_keymapping('a', 'jump')
-    keyboard.add_keymapping('s', 'jump')
-    keyboard.add_keymapping('d', 'jump')
-    keyboard.add_keymapping('Space', 'jump')
-    keyboard.add_keymapping('j', 'jump')
-    keyboard.add_keymapping('k', 'jump')
-    keyboard.add_keymapping('l', 'jump')
-    keyboard.add_keymapping('i', 'jump')
-    keyboard.add_keymapping('ArrowUp', 'jump')
-    keyboard.add_keymapping('ArrowLeft', 'jump')
-    keyboard.add_keymapping('ArrowRight', 'jump')
-    keyboard.add_keymapping('ArrowDown', 'jump')
+    mouse = Mouse.bindTo(canvas)
+
+    canvas.oncontextmenu = () => false
 }
 
 export type AudioPlayback = { stop: () => void, setVolume: (_: number) => void }
