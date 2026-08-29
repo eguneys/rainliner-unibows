@@ -1,4 +1,4 @@
-import { ArcadeBomber, ArcadeHoming, ArcadePlayer, heading, leftward, PositionVelocity, side, Vec2 } from "./arcade";
+import { ArcadeBomber, ArcadeHoming, ArcadePlayer, epsilon, heading, leftward, PositionVelocity, side, Vec2, type ArcadePlayerTargets } from "./arcade";
 import { AudioPlayer } from "./audioplayer";
 import { box_area, distance, type Box } from "./collision"
 import { Keyboard } from "./keyboard";
@@ -152,9 +152,16 @@ class PatrolRegion {
 }
 
 function syncArcadePolygon(body: PositionVelocity, polygon: Polygon) {
-    polygon.theta = -Math.PI * 0.5 + side(body.velocity).angle()
+    if (body.velocity.length() > epsilon)
+        polygon.theta = lerpAngle(polygon.theta, -Math.PI * 0.5 + side(body.velocity).angle(), 0.3)
     polygon.x = body.position.x
     polygon.y = body.position.y
+}
+
+function lerpAngle(a: number, b: number, t: number): number {
+    let diff = (b - a) % (Math.PI * 2);
+    diff = ((diff + Math.PI * 3) % (Math.PI * 2)) - Math.PI; // wrap to [-PI, PI]
+    return a + diff * t;
 }
 
 class HomingBomb {
@@ -164,7 +171,7 @@ class HomingBomb {
 
     life = 1800
 
-    constructor(position: Vec2, velocity: Vec2, readonly seek_target: PositionVelocity) {
+    constructor(position: Vec2, readonly seek_target: PositionVelocity) {
         let a = Polygon.model([0, 10, 100, 0, 120, 50, 100, 100, 0, 90, -10, 50])
         a.x = 320
         a.y = 180
@@ -176,13 +183,13 @@ class HomingBomb {
 
         this.polygon = a
 
-        this.arcade = ArcadeHoming.create(position, velocity, this.seek_target)
+        this.arcade = ArcadeHoming.create(position, this.seek_target)
     }
 
     update(dt: number) {
 
         if (this.life < 1700 && this.arcade.body.velocity.length() < 300) {
-            this.life = 0
+            game.bomber.explode(this)
         }
 
         this.life = Math.max(0, this.life - dt)
@@ -220,6 +227,13 @@ class Bomber {
         this.arcade = ArcadeBomber.create(640, 360, this.seek_target)
     }
 
+    explode(homing: HomingBomb) {
+        this.homings.splice(this.homings.indexOf(homing), 1)
+        game.explosions.push(homing.arcade.body.position)
+
+        //game.herd.setFlee(homing.arcade.body.position)
+    }
+
     fire() {
         if (game.herd.unicorns.length > 0) {
             let visible = this.arcade.body.position.x < 630
@@ -229,7 +243,6 @@ class Bomber {
                 this.homings.push(
                     new HomingBomb(
                         this.arcade.body.position.sub(heading(this.arcade.body.velocity)),
-                        this.arcade.body.velocity,
                         game.herd.unicorns[0].arcade.body)
                 )
             }
@@ -258,40 +271,64 @@ class Bomber {
             this.seek_target.y = this.patrol_a.y
         }
 
-        let homings = []
         for (let homing of this.homings) {
             homing.update(dt)
-
-            if (homing.life === 0) {
-
-            } else {
-                homings.push(homing)
-            }
         }
-        this.homings = homings
     }
 }
 
 
+class Plants {
+
+    flowers: Vec2[] = []
+
+    cool = 0
+
+    push() {
+        if (this.cool === 0) {
+            if (this.flowers.length < 10)
+                this.flowers.push(new Vec2(Math.random() * 640, Math.random() * 360))
+            this.cool = 1000 + Math.random() * 2000
+        }
+    }
+
+    update(dt: number) {
+        this.cool = Math.max(0, this.cool - dt)
+        this.push()
+    }
+}
+
+type UnicornType = 'male' | 'female'
 
 class Unicorn {
     polygon: Polygon
-    seek_target = new Vec2(400, 190)
     arcade: ArcadePlayer
+    targets: ArcadePlayerTargets
 
-    constructor(readonly contain: Box, neighbors: PositionVelocity[]) {
+    constructor(readonly type: UnicornType, contain_box: Box, neighbors: PositionVelocity[]) {
         let a = Polygon.model([0, 10, 100, 0, 120, 50, 100, 100, 0, 90, -10, 50])
         a.x = 320
         a.y = 180
         a.scale = 0.2
         a.off_x = -50
         a.off_y = -50
-        a.color = Colors.light_cyan
+        a.color = type === 'female' ? Colors.light_cyan : Colors.light_yellow
 
 
         this.polygon = a
 
-        this.arcade = ArcadePlayer.create(320, 180, this.seek_target, this.contain, neighbors)
+        this.targets = {
+            neighbors,
+            contain_box,
+            seek_target: Vec2.Zero,
+            flee_target: Vec2.Zero,
+        }
+
+        this.arcade = ArcadePlayer.create(320, 180, this.targets)
+
+        if (type === 'male') {
+            this.arcade.state = 'discover'
+        }
     }
 
     update(dt: number) {
@@ -307,6 +344,10 @@ class UnicornHerd {
 
     neighbors: PositionVelocity[] = []
 
+    food_seek_target = Vec2.Zero
+
+    food_seek_cool = 0
+
     constructor() {
         this.unicorns = []
         this.contain = { x: 0, y: 0, w: 640, h: 360 }
@@ -318,24 +359,109 @@ class UnicornHerd {
     }
 
     push() {
-        let unicorn = new Unicorn(this.contain, this.neighbors)
+        let type: UnicornType = this.unicorns.find(_ => _.type === 'female') ? 'male' : 'female'
+        let unicorn = new Unicorn(type, this.contain, this.neighbors)
         this.unicorns.push(unicorn)
 
         this.neighbors.length = 0
         for (let unicorn of this.unicorns) {
-            this.neighbors.push(unicorn.arcade.body)
+            if (unicorn.type === 'male')
+                this.neighbors.push(unicorn.arcade.body)
         }
     }
 
+    food_seek_j = 0
     update(dt: number) {
+
+        if (this.food_seek_cool === 0) {
+            this.food_seek_cool = 7000
+
+            this.food_seek_target = game.plants.flowers[this.food_seek_j++ % game.plants.flowers.length]
+            for (let unicorn of this.unicorns) {
+                unicorn.arcade.state = 'discover'
+            }
+        } else {
+            this.food_seek_cool = Math.max(0, this.food_seek_cool - dt)
+        }
+
+        let female = this.unicorns.find(_ => _.type === 'female')
+        if (female) {
+            for (let unicorn of this.unicorns) {
+                if (unicorn.type === 'male') {
+                    unicorn.targets.seek_target.x = female.arcade.body.position.x
+                    unicorn.targets.seek_target.y = female.arcade.body.position.y
+                }
+            }
+
+            female.targets.seek_target.x = this.food_seek_target.x
+            female.targets.seek_target.y = this.food_seek_target.y
+        }
+
+        for (let unicorn of this.unicorns) {
+            if (distance(unicorn.arcade.body.position, this.food_seek_target) < 30) {
+                unicorn.arcade.state = 'eat'
+            }
+        }
+
         for (let unicorn of this.unicorns) {
             unicorn.update(dt)
         }
     }
 }
 
+class ImpactFlash {
+
+    polygon: Polygon
+
+    life = 200
+
+    constructor(readonly position: Vec2, radius: number) {
+        this.polygon = Polygon.circle(radius)
+        this.polygon.x = position.x
+        this.polygon.y = position.y
+        this.polygon.color = Colors.light_cyan
+        this.polygon.spacing = 7
+        this.polygon.width = 3
+    }
+
+    update(dt: number) {
+        this.life -= dt
+
+        if (this.life > 60) {
+            this.polygon.color = Color.lerp(this.polygon.color, Colors.light_red, 1 - this.life / 200)
+            this.polygon.spacing = 30
+        } else {
+            this.polygon.color = Color.lerp(this.polygon.color, Colors.dark_brown, 1 - this.life / 60)
+            this.polygon.spacing = 3 + (this.life / 30) * 7
+        }
+    }
+}
+
+class Explosions {
+    impacts: ImpactFlash[]
+
+    constructor() {
+        this.impacts = []
+    }
+
+    push(position: Vec2) {
+        this.impacts.push(new ImpactFlash(position, 37))
+    }
+
+    update(dt: number) {
+        for (let impact of this.impacts) {
+            impact.update(dt)
+        }
+
+        this.impacts = this.impacts.filter(_ => _.life > 0)
+    }
+
+}
+
 class Game {
 
+    plants: Plants
+    explosions: Explosions
     bomber: Bomber
     herd: UnicornHerd
     patrolRegion?: PatrolRegion
@@ -351,6 +477,8 @@ class Game {
     dragArea?: DrawArea
 
     constructor() {
+        this.plants = new Plants()
+        this.explosions = new Explosions()
         this.bomber = new Bomber()
         this.herd = new UnicornHerd()
         this.cParticles = new CursorParticles()
@@ -367,7 +495,9 @@ class Game {
 
         this.camera.update(dt)
 
-        this.bomber.update(dt)
+        this.plants.update(dt)
+        this.explosions.update(dt)
+        //this.bomber.update(dt)
         this.herd.update(dt)
 
         this.cursor.update(dt)
@@ -396,8 +526,6 @@ class Game {
             this.dragArea.y2 = this.cursor.y
         }
 
-        //this.unicorn.seek_target.x = this.cursor.x
-        //this.unicorn.seek_target.y = this.cursor.y
 
         if (this.patrolRegion) {
             let box = this.patrolRegion.box
@@ -410,6 +538,14 @@ class Game {
             this.herd.contain.y = 0
             this.herd.contain.w = 640
             this.herd.contain.h = 360
+        }
+
+
+        if (this.patrolRegion) {
+            let homing = this.bomber.homings[0]
+            if (homing && 60 > distance(homing.arcade.body.position, Vec2.boxCenter(this.patrolRegion.box))) {
+                this.bomber.explode(homing)
+            }
         }
 
         this.cParticles.update(dt)
@@ -769,6 +905,9 @@ function drawPolygon(polygon: Polygon) {
     }
 }
 
+let flowerPolygon = Polygon.circle(8)
+flowerPolygon.color = Colors.light_green
+
 export function _render() {
     if (!first_update_called) return
 
@@ -778,6 +917,12 @@ export function _render() {
     lb.drawLine(0, 180, 640, 180, 640, Colors.dark_green)
 
     drawPolygon(game.bomber.polygon)
+
+    for (let plant of game.plants.flowers) {
+        flowerPolygon.x = plant.x
+        flowerPolygon.y = plant.y
+        drawPolygon(flowerPolygon)
+    }
 
     for (let homing of game.bomber.homings) {
         drawPolygon(homing.polygon)
@@ -796,6 +941,9 @@ export function _render() {
         drawPolygon(game.dragArea.polygon)
     }
 
+    for (let impact of game.explosions.impacts) {
+        drawPolygon(impact.polygon)
+    }
 
     let theta = game.cursor.theta
     let x = game.cursor.box.x
