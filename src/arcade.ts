@@ -1,4 +1,4 @@
-import { box_max, box_min, type Box } from "./collision"
+import { box_center, box_max, box_min, type Box } from "./collision"
 
 export class Vec2 {
     static get Zero() { return new Vec2(0, 0) }
@@ -223,6 +223,22 @@ export class Wander implements SteeringBehavior {
 }
 
 
+export class EvadeBox implements SteeringBehavior {
+    constructor(public body: PositionVelocity, public box: Box) { }
+    compute(): Vec2 {
+        const min = box_min(this.box)
+        const max = box_max(this.box)
+        const p = this.body.position
+        const inside = p.x >= min.x && p.x <= max.x && p.y >= min.y && p.y <= max.y
+        if (!inside) return Vec2.Zero
+
+        const center = Vec2.fromXy(box_center(this.box))
+        const away = p.sub(center)
+        if (away.length() === 0) return Vec2.Zero
+        return away.normalize().scale(this.body.maxAccel)
+    }
+}
+
 export class ContainWithinBox implements SteeringBehavior {
     constructor(public body: PositionVelocity, public box: Box, public margin = 20) { }
     compute(): Vec2 {
@@ -270,7 +286,7 @@ export const epsilon = 0.5
 export const large_epsilon = 2
 
 
-export type ArcadePlayerState = 'flee' | 'eat' | 'hunt' | 'meet' | 'rest' | 'discover'
+export type ArcadePlayerState = 'flee' | 'eat' | 'hunt' | 'meet' | 'rest' | 'discover' | 'wander' | 'meet-evade' | 'after-meet'
 
 export type ArcadePlayerTargets = {
     flee_target: Vec2
@@ -287,9 +303,11 @@ export class ArcadePlayer implements PositionBehavior {
     arrive: Arrive
     wander: Wander
     contain: ContainWithinBox
+    evade_box: EvadeBox
     cohesion!: Cohesion
     seperation!: Separation
     behaviors: [SteeringBehavior, number][]
+    upper_contain: ContainWithinBox
 
     static create = (x: number, y: number, targets: ArcadePlayerTargets) => {
         let body = new PositionVelocity()
@@ -302,6 +320,7 @@ export class ArcadePlayer implements PositionBehavior {
     }
 
     private constructor(readonly body: PositionVelocity, targets: ArcadePlayerTargets) {
+        this.evade_box = new EvadeBox(body, targets.contain_box)
         this.flee = new FleeIfCloseSharp(this.body, targets.flee_target, 100)
         this.arrive = new Arrive(body, targets.seek_target, 20, 10)
         this.wander = new Wander(body, 1, 7, 100)
@@ -310,15 +329,22 @@ export class ArcadePlayer implements PositionBehavior {
         this.seperation = new Separation(body, targets.neighbors, 300)
         this.behaviors = []
         this.combined_steering = new CombinedSteering(body, this.behaviors)
+        this.upper_contain = new ContainWithinBox(body, { x: 0, y: 0, w: 640, h: 360 }, 3)
     }
 
     state: ArcadePlayerState = 'rest'
 
     rest_cool = 0
+    discover_cool = 0
+    wander_cool = 0
+    meet_cool = 0
+    afterMeet_cool = 0
 
     private stateUpdates(dt: number) {
 
         this.behaviors.length = 0
+
+        this.behaviors.push([this.upper_contain, 10])
 
         switch (this.state) {
             case 'rest': {
@@ -344,6 +370,15 @@ export class ArcadePlayer implements PositionBehavior {
                 }
             } break
             case 'discover': {
+                if (this.discover_cool === 0) {
+                    this.discover_cool = 2000
+                } else {
+                    this.discover_cool = Math.max(0, this.discover_cool - dt)
+
+                    if (this.discover_cool === 0) {
+                        this.state = 'wander'
+                    }
+                }
                 this.body.minAccel = 100
                 this.body.maxAccel = 1600
                 this.body.minSpeed = 160
@@ -359,6 +394,91 @@ export class ArcadePlayer implements PositionBehavior {
             case 'eat': {
                 this.body.maxSpeed = 3
                 this.body.maxAccel = 1
+            } break
+            case 'meet-evade': {
+                this.behaviors.push([this.seperation, 0.1])
+                this.behaviors.push([this.cohesion, 1])
+                this.behaviors.push([this.evade_box, 300])
+                this.behaviors.push([this.wander, 80])
+
+                this.body.minAccel = 270
+                this.body.maxAccel = 596
+                this.body.minSpeed = 150
+                this.body.maxSpeed = 250
+                this.body.maxTurnRate = Math.PI * 7
+            } break
+            case 'meet': {
+                this.behaviors.push([this.seperation, 0.1])
+                this.behaviors.push([this.cohesion, 1])
+                this.behaviors.push([this.contain, 300])
+
+
+                if (this.meet_cool === 0) {
+
+                    this.body.minAccel = 370
+                    this.body.maxAccel = 796
+                    this.body.minSpeed = 50
+                    this.body.maxSpeed = 250
+                    this.body.maxTurnRate = Math.PI * 7
+
+                    this.meet_cool = 3344
+                } else {
+                    this.meet_cool = Math.max(0, this.meet_cool - dt)
+
+                    if (this.meet_cool === 0) {
+                        this.state = 'after-meet'
+                    }
+                }
+
+            } break
+            case 'after-meet': {
+
+                this.behaviors.push([this.seperation, 0.1])
+                this.behaviors.push([this.cohesion, 1])
+                this.behaviors.push([this.flee, 30])
+
+
+                if (this.afterMeet_cool === 0) {
+
+                    this.body.minAccel = 570
+                    this.body.maxAccel = 896
+                    this.body.minSpeed = 250
+                    this.body.maxSpeed = 750
+                    this.body.maxTurnRate = Math.PI * 7
+
+                    this.afterMeet_cool = 1344
+                } else {
+                    this.afterMeet_cool = Math.max(0, this.afterMeet_cool - dt)
+
+                    if (this.afterMeet_cool === 0) {
+                        this.state = 'wander'
+                    }
+                }
+
+
+
+            } break
+            case 'wander': {
+                this.behaviors.push([this.wander, 3])
+                this.behaviors.push([this.seperation, 1])
+                this.behaviors.push([this.cohesion, 1])
+
+
+                if (this.wander_cool === 0) {
+                    this.body.minAccel = 170
+                    this.body.maxAccel = 196
+                    this.body.minSpeed = 120
+                    this.body.maxSpeed = 150
+                    this.body.maxTurnRate = Math.PI * 1.5
+
+                    this.wander_cool = 3344
+                } else {
+                    this.wander_cool = Math.max(0, this.wander_cool - dt)
+
+                    if (this.wander_cool === 0) {
+                        this.state = 'discover'
+                    }
+                }
             }
         }
     }

@@ -1,6 +1,6 @@
 import { ArcadeBomber, ArcadeHoming, ArcadePlayer, epsilon, heading, leftward, PositionVelocity, side, Vec2, type ArcadePlayerTargets } from "./arcade";
 import { AudioPlayer } from "./audioplayer";
-import { box_area, distance, type Box } from "./collision"
+import { box_area, box_contains, distance, type Box } from "./collision"
 import { Keyboard } from "./keyboard";
 import { Mouse } from "./mouse";
 import { Camera2D } from "./webgl/camera2d";
@@ -19,6 +19,8 @@ export const Colors = {
     dark_yellow: Color.hex(0xf9a31b),
     light_yellow: Color.hex(0xffd541),
     dark_brown: Color.hex(0x221c1a),
+    light_purple: Color.hex(0xbc4a9b),
+    dark_purple: Color.hex(0x403353),
 }
 
 export class Spring {
@@ -305,7 +307,7 @@ class Unicorn {
     arcade: ArcadePlayer
     targets: ArcadePlayerTargets
 
-    constructor(readonly type: UnicornType, contain_box: Box, neighbors: PositionVelocity[]) {
+    constructor(readonly type: UnicornType, neighbors: PositionVelocity[]) {
         let a = Polygon.model([0, 10, 100, 0, 120, 50, 100, 100, 0, 90, -10, 50])
         a.x = 320
         a.y = 180
@@ -319,7 +321,7 @@ class Unicorn {
 
         this.targets = {
             neighbors,
-            contain_box,
+            contain_box: { x: 0, y: 0, w: 0, h: 0 },
             seek_target: Vec2.Zero,
             flee_target: Vec2.Zero,
         }
@@ -339,7 +341,6 @@ class Unicorn {
 }
 
 class UnicornHerd {
-    contain: Box
     unicorns: Unicorn[]
 
     neighbors: PositionVelocity[] = []
@@ -350,7 +351,6 @@ class UnicornHerd {
 
     constructor() {
         this.unicorns = []
-        this.contain = { x: 0, y: 0, w: 640, h: 360 }
 
 
         this.push()
@@ -358,9 +358,46 @@ class UnicornHerd {
         this.push()
     }
 
+    findMeeting(box: Box) {
+
+        let ab = this.unicorns.filter(_ => box_contains(box, _.arcade.body.position))
+
+        if (ab.length !== 2) return
+
+        if (ab[0].arcade.state === 'eat') return
+
+        if (ab[0].type === 'female' || ab[1].type === 'female') {
+
+            ab[0].targets.contain_box.x = box.x
+            ab[0].targets.contain_box.y = box.y
+            ab[0].targets.contain_box.w = box.w
+            ab[0].targets.contain_box.h = box.h
+
+            ab[1].targets.contain_box.x = box.x
+            ab[1].targets.contain_box.y = box.y
+            ab[1].targets.contain_box.w = box.w
+            ab[1].targets.contain_box.h = box.h
+
+            ab[0].arcade.state = 'meet'
+            ab[1].arcade.state = 'meet'
+
+            ab[0].polygon.color = Colors.light_purple
+            ab[1].polygon.color = Colors.dark_purple
+        }
+
+        for (let unicorn of this.unicorns) {
+            if (ab.includes(unicorn)) continue
+            unicorn.arcade.state = 'meet-evade'
+            unicorn.targets.contain_box.x = box.x
+            unicorn.targets.contain_box.y = box.y
+            unicorn.targets.contain_box.w = box.w
+            unicorn.targets.contain_box.h = box.h
+        }
+    }
+
     push() {
         let type: UnicornType = this.unicorns.find(_ => _.type === 'female') ? 'male' : 'female'
-        let unicorn = new Unicorn(type, this.contain, this.neighbors)
+        let unicorn = new Unicorn(type, this.neighbors)
         this.unicorns.push(unicorn)
 
         this.neighbors.length = 0
@@ -378,7 +415,8 @@ class UnicornHerd {
 
             this.food_seek_target = game.plants.flowers[this.food_seek_j++ % game.plants.flowers.length]
             for (let unicorn of this.unicorns) {
-                unicorn.arcade.state = 'discover'
+                if (unicorn.arcade.state === 'eat')
+                    unicorn.arcade.state = 'discover'
             }
         } else {
             this.food_seek_cool = Math.max(0, this.food_seek_cool - dt)
@@ -398,10 +436,33 @@ class UnicornHerd {
         }
 
         for (let unicorn of this.unicorns) {
-            if (distance(unicorn.arcade.body.position, this.food_seek_target) < 30) {
-                unicorn.arcade.state = 'eat'
+            if (unicorn.arcade.state === 'discover') {
+                if (distance(unicorn.arcade.body.position, this.food_seek_target) < 30) {
+                    unicorn.arcade.state = 'eat'
+                }
+            }
+
+            if (unicorn.arcade.state === 'after-meet') {
+                game.patrolRegion = undefined
+                if (unicorn.type === 'male') {
+                    unicorn.polygon.color = Colors.light_yellow
+                } else {
+                    unicorn.polygon.color = Colors.light_cyan
+                }
             }
         }
+
+
+        let ab = this.unicorns.filter(_ => _.arcade.state === 'after-meet')
+
+        if (ab.length === 2) {
+            ab[0].targets.flee_target.x = ab[1].arcade.body.position.x
+            ab[0].targets.flee_target.y = ab[1].arcade.body.position.y
+
+            ab[1].targets.flee_target.x = ab[0].arcade.body.position.x
+            ab[1].targets.flee_target.y = ab[0].arcade.body.position.y
+        }
+
 
         for (let unicorn of this.unicorns) {
             unicorn.update(dt)
@@ -516,6 +577,10 @@ class Game {
 
             if (this.dragArea) {
                 this.patrolRegion = this.dragArea.patrolRegion
+
+
+                if (this.patrolRegion)
+                    this.herd.findMeeting(this.patrolRegion.box)
             }
 
             this.dragArea = undefined
@@ -524,28 +589,6 @@ class Game {
         if (this.dragArea) {
             this.dragArea.x2 = this.cursor.x
             this.dragArea.y2 = this.cursor.y
-        }
-
-
-        if (this.patrolRegion) {
-            let box = this.patrolRegion.box
-            this.herd.contain.x = box.x
-            this.herd.contain.y = box.y
-            this.herd.contain.w = box.w
-            this.herd.contain.h = box.h
-        } else {
-            this.herd.contain.x = 0
-            this.herd.contain.y = 0
-            this.herd.contain.w = 640
-            this.herd.contain.h = 360
-        }
-
-
-        if (this.patrolRegion) {
-            let homing = this.bomber.homings[0]
-            if (homing && 60 > distance(homing.arcade.body.position, Vec2.boxCenter(this.patrolRegion.box))) {
-                this.bomber.explode(homing)
-            }
         }
 
         this.cParticles.update(dt)

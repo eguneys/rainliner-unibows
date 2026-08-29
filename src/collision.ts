@@ -32,6 +32,10 @@ export function box_intersectsRegion(a: Box, b: Box) {
     }
 }
 
+export function box_center(a: Box) {
+    return { x: a.x + a.w / 2, y: a.y + a.h / 2 }
+}
+
 export function box_min(a: Box) {
     return { x: a.x, y: a.y }
 }
