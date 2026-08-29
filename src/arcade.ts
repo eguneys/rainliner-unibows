@@ -21,6 +21,7 @@ export class Vec2 {
     }
 
     normalize() {
+        if (this.length() === 0) return Vec2.Zero
         return this.scale(1 / this.length())
     }
 
@@ -40,6 +41,10 @@ export class Vec2 {
     }
 }
 
+export function leftward(angle: number) {
+    return Math.cos(angle) < 0
+}
+
 export class PositionVelocity {
     position = Vec2.Zero
     velocity = Vec2.Zero
@@ -49,6 +54,8 @@ export class PositionVelocity {
     maxSpeed!: number
     minAccel!: number
     maxAccel!: number
+
+    maxTurnRate = Math.PI * 1.2
 
     update(dt: number) {
         let dtSec = dt * 0.001
@@ -76,8 +83,21 @@ export class PositionVelocity {
     }
 
     steer(desired: Vec2) {
-        this.acceleration = desired.sub(this.velocity)
+        const mag = desired.length()
+        if (mag < 1e-6 || this.acceleration.length() < 1e-6) {
+            this.acceleration = desired
+            return
+        }
+        const curAngle = this.acceleration.angle()
+        const desAngle = desired.angle()
+        let diff = desAngle - curAngle
+        diff = Math.atan2(Math.sin(diff), Math.cos(diff)) // wrap to [-PI, PI]
+        const maxStep = this.maxTurnRate * 0.016
+        const clampedDiff = Math.max(-maxStep, Math.min(maxStep, diff))
+        const newAngle = curAngle + clampedDiff
+        this.acceleration = new Vec2(Math.cos(newAngle), Math.sin(newAngle)).scale(mag)
     }
+
 }
 
 interface SteeringBehavior {
@@ -184,6 +204,33 @@ export class ContainWithinBox implements SteeringBehavior {
     }
 }
 
+
+class Cohesion implements SteeringBehavior {
+    constructor(public body: PositionVelocity, public neighbors: PositionVelocity[]) { }
+    compute(): Vec2 {
+        if (this.neighbors.length === 0) return Vec2.Zero
+        const center = this.neighbors.reduce((sum, n) => sum.add(n.position), Vec2.Zero)
+            .scale(1 / this.neighbors.length)
+        return new Seek(this.body, center).compute()
+    }
+}
+
+class Separation implements SteeringBehavior {
+    constructor(public body: PositionVelocity, public neighbors: PositionVelocity[], public radius = 30) { }
+    compute(): Vec2 {
+        let force = Vec2.Zero
+        for (const n of this.neighbors) {
+            const offset = this.body.position.sub(n.position)
+            const dist = offset.length()
+            if (dist > 1e-6 && dist < this.radius) {
+                force = force.add(offset.normalize().scale(1 / dist)) // stronger when closer
+            }
+        }
+        return force
+    }
+}
+
+
 export type Sign = 1 | -1 | 0
 export const epsilon = 0.5
 export const large_epsilon = 2
@@ -250,26 +297,31 @@ export class ArcadePlayer implements PositionBehavior {
     seek: Seek
     wander: Wander
     contain: ContainWithinBox
+    cohesion!: Cohesion
+    seperation!: Separation
     behaviors: [SteeringBehavior, number][]
 
-    static create = (x: number, y: number, seek_target: Vec2, contain: Box) => {
+    static create = (x: number, y: number, seek_target: Vec2, contain: Box, neighbors: PositionVelocity[]) => {
         let body = new PositionVelocity()
         body.position.x = x
         body.position.y = y
-        let res = new ArcadePlayer(body, seek_target, contain)
+        let res = new ArcadePlayer(body, seek_target, contain, neighbors)
 
         res.body.minAccel = 100
-        res.body.maxAccel = 6000
+        res.body.maxAccel = 2600
         res.body.minSpeed = 60
-        res.body.maxSpeed = 700
+        res.body.maxSpeed = 300
+        res.body.maxTurnRate = Math.PI * 1.8
 
         return res
     }
 
-    private constructor(public body: PositionVelocity, seek_target: Vec2, contain: Box) {
+    private constructor(public body: PositionVelocity, seek_target: Vec2, contain: Box, neighbors: PositionVelocity[]) {
         this.seek = new Seek(body, seek_target)
         this.wander = new Wander(body, 1, 7, 100)
         this.contain = new ContainWithinBox(body, contain, 1)
+        this.cohesion = new Cohesion(body, neighbors)
+        this.seperation = new Separation(body, neighbors, 300)
         this.behaviors = []
         this.combined_steering = new CombinedSteering(body, this.behaviors)
     }
@@ -284,12 +336,13 @@ export class ArcadePlayer implements PositionBehavior {
 
     private stateUpdates() {
         this.behaviors.length = 0
+        this.behaviors.push([this.seperation, 10000])
         if (box_contains(this.contain.box, this.seek.target)) {
-            console.log(this.contain.box, this.seek.target)
             this.behaviors.push([this.seek, 1])
         }
         this.behaviors.push([this.wander, 1])
         this.behaviors.push([this.contain, 5])
+        this.behaviors.push([this.cohesion, 1])
     }
 
 
@@ -297,6 +350,144 @@ export class ArcadePlayer implements PositionBehavior {
         this.stateUpdates()
         this.combined_steering.update(dt)
     }
+
+}
+
+
+export class ArcadeHoming implements PositionBehavior {
+
+    combined_steering: CombinedSteering
+
+    fire_off: Seek
+    long_seek: Seek
+    pursue: Pursue
+    arrive: Arrive
+    behaviors: [SteeringBehavior, number][]
+
+    life = 0
+
+    static create = (position: Vec2, velocity: Vec2, seek_target: PositionVelocity) => {
+        let body = new PositionVelocity()
+        body.position.x = position.x
+        body.position.y = position.y
+        body.velocity.x = -Math.abs(180 - position.y) / 180 * 3
+        body.velocity.y = Math.sign(180 - position.y) * 3
+        let res = new ArcadeHoming(body, seek_target)
+
+        res.body.minAccel = 300
+        res.body.maxAccel = 700
+        res.body.minSpeed = 160
+        res.body.maxSpeed = 1020
+
+        return res
+    }
+
+    private constructor(readonly body: PositionVelocity, readonly seek_target: PositionVelocity) {
+        this.pursue = new Pursue(body, seek_target, 0.01)
+        this.arrive = new Arrive(body, seek_target.position, 30)
+
+        let fire_off = body.position.add((body.velocity).scale(30))
+        let long_seek = body.position.add(heading(body.velocity).scale(100))
+        long_seek.x -= 100
+        this.long_seek = new Seek(body, long_seek)
+        this.fire_off = new Seek(body, fire_off)
+        this.behaviors = []
+        this.combined_steering = new CombinedSteering(body, this.behaviors)
+    }
+
+    butt!: ArcadePlayerButtonSigns
+
+    coll!: Collisions
+
+    state: ArcadePlayerState = 'fall'
+
+    private stateUpdates() {
+
+        let fire_off = this.life < 80
+
+        if (fire_off) {
+            this.body.minAccel = 300
+            this.body.maxAccel = 500
+            this.body.maxSpeed = 800
+            this.body.minSpeed = 400
+            this.body.maxTurnRate = Math.PI * 0.1
+        } else {
+            this.body.minAccel = 700
+            this.body.maxAccel = 1700
+            this.body.minSpeed = 160
+            this.body.maxSpeed = 520
+            this.body.maxTurnRate = Math.PI * 2
+        }
+
+        this.behaviors.length = 0
+        this.behaviors.push([this.arrive, 3000])
+        this.behaviors.push([this.pursue, 30])
+        //this.behaviors.push([this.long_seek, this.life < 200 ? 7 : 1])
+        this.behaviors.push([this.fire_off, fire_off ? 700 : 1])
+    }
+
+
+    update(dt: number) {
+        this.life += dt
+        this.stateUpdates()
+        this.combined_steering.update(dt)
+    }
+
+}
+
+
+export class ArcadeBomber implements PositionBehavior {
+
+    combined_steering: CombinedSteering
+
+    contain: ContainWithinBox
+    arrive: Arrive
+    behaviors: [SteeringBehavior, number][]
+
+    static create = (x: number, y: number, seek_target: Vec2) => {
+        let body = new PositionVelocity()
+        body.position.x = x
+        body.position.y = y
+        let res = new ArcadeBomber(body, seek_target)
+
+        res.body.minAccel = 1000
+        res.body.maxAccel = 3000
+        res.body.minSpeed = 170
+        res.body.maxSpeed = 180
+
+        res.body.maxTurnRate = Math.PI * 2
+
+        return res
+    }
+
+    private constructor(public body: PositionVelocity, seek_target: Vec2) {
+        this.contain = new ContainWithinBox(body, { x: 630, y: 10, w: 5, h: 350 }, 10)
+        this.arrive = new Arrive(body, seek_target, 10)
+        this.behaviors = []
+        this.combined_steering = new CombinedSteering(body, this.behaviors)
+    }
+
+    butt!: ArcadePlayerButtonSigns
+
+    coll!: Collisions
+
+    state: ArcadePlayerState = 'fall'
+
+    jump_buffer = 0
+
+    private stateUpdates() {
+        this.behaviors.length = 0
+        this.behaviors.push([this.contain, 80])
+        this.behaviors.push([this.arrive, 1])
+    }
+
+
+    update(dt: number) {
+        this.stateUpdates()
+        this.combined_steering.update(dt)
+    }
+
+
 
 }
 

@@ -1,6 +1,6 @@
-import { ArcadePlayer, side, Vec2 } from "./arcade";
+import { ArcadeBomber, ArcadeHoming, ArcadePlayer, heading, leftward, PositionVelocity, side, Vec2 } from "./arcade";
 import { AudioPlayer } from "./audioplayer";
-import { box_area, type Box } from "./collision"
+import { box_area, distance, type Box } from "./collision"
 import { Keyboard } from "./keyboard";
 import { Mouse } from "./mouse";
 import { Camera2D } from "./webgl/camera2d";
@@ -151,13 +151,135 @@ class PatrolRegion {
     }
 }
 
+function syncArcadePolygon(body: PositionVelocity, polygon: Polygon) {
+    polygon.theta = -Math.PI * 0.5 + side(body.velocity).angle()
+    polygon.x = body.position.x
+    polygon.y = body.position.y
+}
+
+class HomingBomb {
+
+    polygon: Polygon
+    arcade: ArcadeHoming
+
+    life = 1800
+
+    constructor(position: Vec2, velocity: Vec2, readonly seek_target: PositionVelocity) {
+        let a = Polygon.model([0, 10, 100, 0, 120, 50, 100, 100, 0, 90, -10, 50])
+        a.x = 320
+        a.y = 180
+        a.scale = 0.2
+        a.off_x = -50
+        a.off_y = -50
+        a.color = Colors.light_red
+
+
+        this.polygon = a
+
+        this.arcade = ArcadeHoming.create(position, velocity, this.seek_target)
+    }
+
+    update(dt: number) {
+
+        if (this.life < 1700 && this.arcade.body.velocity.length() < 300) {
+            this.life = 0
+        }
+
+        this.life = Math.max(0, this.life - dt)
+        this.arcade.update(dt)
+
+        syncArcadePolygon(this.arcade.body, this.polygon)
+    }
+}
+
+class Bomber {
+
+    polygon: Polygon
+    arcade: ArcadeBomber
+
+    patrol_a = new Vec2(600, 370)
+    patrol_b = new Vec2(600, 10)
+    seek_target = new Vec2(this.patrol_a.x, this.patrol_a.y)
+
+    cool = 0
+
+    homings: HomingBomb[] = []
+
+    constructor() {
+        let a = Polygon.model([0, 10, 100, 0, 120, 50, 100, 100, 0, 90, -10, 50])
+        a.x = 320
+        a.y = 180
+        a.scale = 0.2
+        a.off_x = -50
+        a.off_y = -50
+        a.color = Colors.dark_red
+
+
+        this.polygon = a
+
+        this.arcade = ArcadeBomber.create(640, 360, this.seek_target)
+    }
+
+    fire() {
+        if (game.herd.unicorns.length > 0) {
+            let visible = this.arcade.body.position.x < 630
+            let facing_left = leftward(heading(this.arcade.body.velocity).angle())
+            if (visible && facing_left) {
+                this.cool = 800
+                this.homings.push(
+                    new HomingBomb(
+                        this.arcade.body.position.sub(heading(this.arcade.body.velocity)),
+                        this.arcade.body.velocity,
+                        game.herd.unicorns[0].arcade.body)
+                )
+            }
+        }
+    }
+
+
+    update(dt: number) {
+
+        this.cool = Math.max(0, this.cool - dt)
+
+        if (this.cool === 0) {
+            this.fire()
+        }
+
+        this.arcade.update(dt)
+
+        syncArcadePolygon(this.arcade.body, this.polygon)
+
+        if (distance(this.arcade.body.position, this.patrol_a) < 60) {
+            this.seek_target.x = this.patrol_b.x
+            this.seek_target.y = this.patrol_b.y
+        }
+        if (distance(this.arcade.body.position, this.patrol_b) < 60) {
+            this.seek_target.x = this.patrol_a.x
+            this.seek_target.y = this.patrol_a.y
+        }
+
+        let homings = []
+        for (let homing of this.homings) {
+            homing.update(dt)
+
+            if (homing.life === 0) {
+
+            } else {
+                homings.push(homing)
+            }
+        }
+        this.homings = homings
+    }
+}
+
+
+
 class Unicorn {
     polygon: Polygon
     seek_target = new Vec2(400, 190)
-    contain = { x: 300, y: 100, w: 300, h: 300 }
-    arcade = ArcadePlayer.create(320, 180, this.seek_target, this.contain)
+    arcade: ArcadePlayer
 
-    constructor() {
+    constructor(readonly contain: Box, neighbors: PositionVelocity[]) {
         let a = Polygon.model([0, 10, 100, 0, 120, 50, 100, 100, 0, 90, -10, 50])
         a.x = 320
         a.y = 180
@@ -168,20 +290,54 @@ class Unicorn {
 
 
         this.polygon = a
+
+        this.arcade = ArcadePlayer.create(320, 180, this.seek_target, this.contain, neighbors)
     }
 
     update(dt: number) {
         this.arcade.update(dt)
 
-        this.polygon.theta = -Math.PI * 0.5 + side(this.arcade.body.velocity).angle()
-        this.polygon.x = this.arcade.body.position.x
-        this.polygon.y = this.arcade.body.position.y
+        syncArcadePolygon(this.arcade.body, this.polygon)
+    }
+}
+
+class UnicornHerd {
+    contain: Box
+    unicorns: Unicorn[]
+
+    neighbors: PositionVelocity[] = []
+
+    constructor() {
+        this.unicorns = []
+        this.contain = { x: 0, y: 0, w: 640, h: 360 }
+
+
+        this.push()
+        this.push()
+        this.push()
+    }
+
+    push() {
+        let unicorn = new Unicorn(this.contain, this.neighbors)
+        this.unicorns.push(unicorn)
+
+        this.neighbors.length = 0
+        for (let unicorn of this.unicorns) {
+            this.neighbors.push(unicorn.arcade.body)
+        }
+    }
+
+    update(dt: number) {
+        for (let unicorn of this.unicorns) {
+            unicorn.update(dt)
+        }
     }
 }
 
 class Game {
 
-    unicorn: Unicorn
+    bomber: Bomber
+    herd: UnicornHerd
     patrolRegion?: PatrolRegion
 
     show_end_menu = false
@@ -195,7 +351,8 @@ class Game {
     dragArea?: DrawArea
 
     constructor() {
-        this.unicorn = new Unicorn()
+        this.bomber = new Bomber()
+        this.herd = new UnicornHerd()
         this.cParticles = new CursorParticles()
         this.cursor = new Cursor()
         this.camera = new Camera(640, 360)
@@ -210,7 +367,8 @@ class Game {
 
         this.camera.update(dt)
 
-        this.unicorn.update(dt)
+        this.bomber.update(dt)
+        this.herd.update(dt)
 
         this.cursor.update(dt)
         this.cursor.x = mouse.is_hovering.x
@@ -238,20 +396,20 @@ class Game {
             this.dragArea.y2 = this.cursor.y
         }
 
-        this.unicorn.seek_target.x = this.cursor.x
-        this.unicorn.seek_target.y = this.cursor.y
+        //this.unicorn.seek_target.x = this.cursor.x
+        //this.unicorn.seek_target.y = this.cursor.y
 
         if (this.patrolRegion) {
             let box = this.patrolRegion.box
-            this.unicorn.contain.x = box.x
-            this.unicorn.contain.y = box.y
-            this.unicorn.contain.w = box.w
-            this.unicorn.contain.h = box.h
+            this.herd.contain.x = box.x
+            this.herd.contain.y = box.y
+            this.herd.contain.w = box.w
+            this.herd.contain.h = box.h
         } else {
-            this.unicorn.contain.x = 0
-            this.unicorn.contain.y = 0
-            this.unicorn.contain.w = 640
-            this.unicorn.contain.h = 360
+            this.herd.contain.x = 0
+            this.herd.contain.y = 0
+            this.herd.contain.w = 640
+            this.herd.contain.h = 360
         }
 
         this.cParticles.update(dt)
@@ -619,7 +777,15 @@ export function _render() {
     // background
     lb.drawLine(0, 180, 640, 180, 640, Colors.dark_green)
 
-    drawPolygon(game.unicorn.polygon)
+    drawPolygon(game.bomber.polygon)
+
+    for (let homing of game.bomber.homings) {
+        drawPolygon(homing.polygon)
+    }
+
+    for (let unicorn of game.herd.unicorns) {
+        drawPolygon(unicorn.polygon)
+    }
 
     if (game.patrolRegion) {
         drawPolygon(game.patrolRegion.polygon)
