@@ -8,6 +8,7 @@ import { Color } from "./webgl/color";
 import { LineBatch } from "./webgl/linebatch";
 import type { WebGlRenderer } from "./webgl/renderer";
 
+
 export const Colors = {
     flash: new Color(255, 255, 255, 0),
     dark_green: Color.hex(0x122020),
@@ -23,6 +24,8 @@ export const Colors = {
     light_purple: Color.hex(0xbc4a9b),
     dark_purple: Color.hex(0x403353),
 }
+
+const AllColors = Object.keys(Colors)
 
 export class Spring {
     position: number;
@@ -539,6 +542,33 @@ class Explosions {
 
 }
 
+class Dust {
+    i_rainbow!: number
+    radius!: number
+    theta!: number
+
+    static create = (body: PositionVelocity) => {
+        let res = new Dust(body.position.x, body.position.y, body.velocity.scale(-1))
+        res.radius = 3 + Math.min(8, body.velocity.length() / body.maxSpeed) * 10
+        res.theta = body.velocity.angle()
+        res.i_rainbow = Math.floor(Math.abs(Math.sin(t * 0.01)) * (AllColors.length - 1))
+        return res
+    }
+    private constructor(public x: number, public y: number, public d: Vec2) { }
+    cool = 0
+
+    update(dt: number) {
+        if (this.cool === 0) {
+            this.radius = Math.max(2, this.radius - (1 + Math.random() * 1.7))
+            this.cool = 60 + 33 * Math.random()
+        }
+        this.cool = Math.max(0, this.cool - dt)
+
+        this.x += this.d.x * dt * 0.0008
+        this.y += this.d.y * dt * 0.0008
+    }
+}
+
 class Lepricon {
     polygon: Polygon
     arcade: ArcadeLepricon
@@ -619,6 +649,7 @@ class Lepricon {
 
 class Game {
 
+    dusts: Dust[]
     binaryScore: BinaryScore
     lepricon: Lepricon
 
@@ -639,6 +670,7 @@ class Game {
     dragArea?: DrawArea
 
     constructor() {
+        this.dusts = []
         this.binaryScore = new BinaryScore()
         this.lepricon = new Lepricon()
         this.plants = new Plants()
@@ -653,6 +685,25 @@ class Game {
     }
 
     update(dt: number) {
+
+        console.log(this.lepricon.arcade.body.velocity.length() < 270)
+        if (this.lepricon.arcade.body.velocity.length() > 3) {
+            if (this.dusts.length < 3) {
+                this.dusts.push(Dust.create(this.lepricon.arcade.body))
+            }
+        } else {
+
+            if (this.lepricon.arcade.body.velocity.length() > 200) {
+                if (this.dusts.length < 7) {
+                    this.dusts.push(Dust.create(this.lepricon.arcade.body))
+                }
+            }
+        }
+
+        for (let dust of this.dusts) {
+            dust.update(dt)
+        }
+        this.dusts = this.dusts.filter(_ => _.radius > 8)
 
         this.camera.lerpPanCenter(0, 0)
 
@@ -1249,6 +1300,16 @@ export function _render() {
         lb.drawLine(0, 0, 640, 0, 65, new Color(Colors.dark_red.r, Colors.dark_red.g, Colors.dark_red.b, 30))
     }
 
+    for (let dust of game.dusts) {
+        let polygon = Polygon.circle(dust.radius, dust.radius / 4.5)
+        polygon.x = dust.x
+        polygon.y = dust.y
+        polygon.theta = dust.theta
+        // @ts-ignore
+        polygon.color = Colors[AllColors[dust.i_rainbow]]
+        drawPolygon(polygon)
+    }
+
     for (let zero of game.binaryScore.zeros) {
         drawPolygon(zero.polygon)
     }
@@ -1367,13 +1428,13 @@ export function _set_canvas(canvas: HTMLCanvasElement) {
 
 class AudioPlaybackStuff {
 
-    levels = ['', '2']
+    levels = ['', '2', '3']
     i_level = 0
 
     public playInc_Audio() {
         this.stop_MainAudio()
-        this.i_level = (this.i_level + 1) % this.levels.length
         this.play_MainAudio()
+        this.i_level = (this.i_level + 1) % this.levels.length
     }
 
     private play_MainAudio() {
@@ -1399,11 +1460,14 @@ class AudioPlayerManager {
     static loadAudio = async () => {
         let res = new AudioPlayerManager()
 
-        res.audio.set('main', await AudioPlayer.init('07 07 07 07 01 01 17 17 101 017 3 2', 80))
-        res.audio.set('lead', await AudioPlayer.init('         A     B     $   C    0 ; B', 80))
+        res.audio.set('main3', await AudioPlayer.init('EGIJP EGIJN GIJNQ GIJGP IGEIP IGEES EGIJP EGIJN GIJNQ GIJGP IGEIP IGEES', 120))
+        res.audio.set('lead3', await AudioPlayer.init(`/G;   *G;   /I.   *I,   /G;   *;    /G.   *,    /I;   *.    /G,   *.   `, 120))
 
-        res.audio.set('main2', await AudioPlayer.init('01234 01234 01234 5432 0 0 0 00 0 000', 100))
-        res.audio.set('lead2', await AudioPlayer.init('          A  B    $    C X ; Y  Z', 100))
+        res.audio.set('main2', await AudioPlayer.init('07 06 05 04 01 01 13 15 101 017 3 2 12340 340012 771171 71 71', 81))
+        res.audio.set('lead2', await AudioPlayer.init('   c     a     B     .   c    0 ; b  w      v   v   q     q w', 81))
+
+        res.audio.set('main', await AudioPlayer.init('01234 01334 01224 6432 0 3 0 01 0 020', 90))
+        res.audio.set('lead', await AudioPlayer.init('          A  B    $    C X ; Y  Z a z', 90))
 
         res.audio.set('over', await AudioPlayer.init('0148 8878;%!@', 330))
         return res
