@@ -1,4 +1,4 @@
-import { ArcadeBomber, ArcadeHoming, ArcadePlayer, epsilon, heading, leftward, PositionVelocity, side, Vec2, type ArcadePlayerTargets } from "./arcade";
+import { ArcadeBomber, ArcadeHoming, ArcadeLepricon, ArcadePlayer, epsilon, heading, leftward, PositionVelocity, side, Vec2, type ArcadePlayerTargets } from "./arcade";
 import { AudioPlayer } from "./audioplayer";
 import { box_area, box_contains, distance, type Box } from "./collision"
 import { Keyboard } from "./keyboard";
@@ -233,7 +233,7 @@ class Bomber {
         this.homings.splice(this.homings.indexOf(homing), 1)
         game.explosions.push(homing.arcade.body.position)
 
-        //game.herd.setFlee(homing.arcade.body.position)
+        game.herd.setFlee(homing.arcade.body.position)
     }
 
     fire() {
@@ -241,7 +241,7 @@ class Bomber {
             let visible = this.arcade.body.position.x < 630
             let facing_left = leftward(heading(this.arcade.body.velocity).angle())
             if (visible && facing_left) {
-                this.cool = 800
+                this.cool = 5800
                 this.homings.push(
                     new HomingBomb(
                         this.arcade.body.position.sub(heading(this.arcade.body.velocity)),
@@ -329,7 +329,7 @@ class Unicorn {
         this.arcade = ArcadePlayer.create(320, 180, this.targets)
 
         if (type === 'male') {
-            this.arcade.state = 'discover'
+            this.arcade.setState('discover')
         }
     }
 
@@ -351,11 +351,17 @@ class UnicornHerd {
 
     constructor() {
         this.unicorns = []
+    }
 
+    setFlee(target: Vec2) {
+        for (let unicorn of this.unicorns) {
+            if (distance(unicorn.arcade.body.position, target) < 200) {
+                unicorn.targets.flee_target.x = target.x
+                unicorn.targets.flee_target.y = target.y
 
-        this.push()
-        this.push()
-        this.push()
+                unicorn.arcade.setState('flee')
+            }
+        }
     }
 
     findMeeting(box: Box) {
@@ -378,8 +384,8 @@ class UnicornHerd {
             ab[1].targets.contain_box.w = box.w
             ab[1].targets.contain_box.h = box.h
 
-            ab[0].arcade.state = 'meet'
-            ab[1].arcade.state = 'meet'
+            ab[0].arcade.setState('meet')
+            ab[1].arcade.setState('meet')
 
             ab[0].polygon.color = Colors.light_purple
             ab[1].polygon.color = Colors.dark_purple
@@ -387,7 +393,7 @@ class UnicornHerd {
 
         for (let unicorn of this.unicorns) {
             if (ab.includes(unicorn)) continue
-            unicorn.arcade.state = 'meet-evade'
+            unicorn.arcade.setState('meet-evade')
             unicorn.targets.contain_box.x = box.x
             unicorn.targets.contain_box.y = box.y
             unicorn.targets.contain_box.w = box.w
@@ -396,7 +402,7 @@ class UnicornHerd {
     }
 
     push() {
-        let type: UnicornType = this.unicorns.find(_ => _.type === 'female') ? 'male' : 'female'
+        let type: UnicornType = this.unicorns.filter(_ => _.type === 'female').length === 2 ? 'male' : 'female'
         let unicorn = new Unicorn(type, this.neighbors)
         this.unicorns.push(unicorn)
 
@@ -405,6 +411,8 @@ class UnicornHerd {
             if (unicorn.type === 'male')
                 this.neighbors.push(unicorn.arcade.body)
         }
+
+        this.neighbors.push(game.lepricon.arcade.body)
     }
 
     food_seek_j = 0
@@ -416,7 +424,7 @@ class UnicornHerd {
             this.food_seek_target = game.plants.flowers[this.food_seek_j++ % game.plants.flowers.length]
             for (let unicorn of this.unicorns) {
                 if (unicorn.arcade.state === 'eat')
-                    unicorn.arcade.state = 'discover'
+                    unicorn.arcade.setState('discover')
             }
         } else {
             this.food_seek_cool = Math.max(0, this.food_seek_cool - dt)
@@ -438,7 +446,7 @@ class UnicornHerd {
         for (let unicorn of this.unicorns) {
             if (unicorn.arcade.state === 'discover') {
                 if (distance(unicorn.arcade.body.position, this.food_seek_target) < 30) {
-                    unicorn.arcade.state = 'eat'
+                    unicorn.arcade.setState('eat')
                 }
             }
 
@@ -474,7 +482,7 @@ class ImpactFlash {
 
     polygon: Polygon
 
-    life = 200
+    life = 350
 
     constructor(readonly position: Vec2, radius: number) {
         this.polygon = Polygon.circle(radius)
@@ -488,11 +496,11 @@ class ImpactFlash {
     update(dt: number) {
         this.life -= dt
 
-        if (this.life > 60) {
+        if (this.life > 90) {
             this.polygon.color = Color.lerp(this.polygon.color, Colors.light_red, 1 - this.life / 200)
             this.polygon.spacing = 30
         } else {
-            this.polygon.color = Color.lerp(this.polygon.color, Colors.dark_brown, 1 - this.life / 60)
+            this.polygon.color = Color.lerp(this.polygon.color, Colors.dark_brown, 1 - this.life / 120)
             this.polygon.spacing = 3 + (this.life / 30) * 7
         }
     }
@@ -519,7 +527,36 @@ class Explosions {
 
 }
 
+class Lepricon {
+    polygon: Polygon
+    arcade: ArcadeLepricon
+
+    constructor() {
+        this.polygon = Polygon.circle(8, 3)
+        this.polygon.color = Colors.dark_yellow
+
+        this.arcade = ArcadeLepricon.create(200, 200)
+    }
+
+    update(dt: number) {
+
+        this.arcade.buttons = {
+            req_left: keyboard.getActionSign('left'),
+            req_right: keyboard.getActionSign('right'),
+            req_up: keyboard.getActionSign('up'),
+            req_down: keyboard.getActionSign('down'),
+        }
+
+
+        this.arcade.update(dt)
+        syncArcadePolygon(this.arcade.body, this.polygon)
+    }
+}
+
 class Game {
+
+    binaryScore: BinaryScore
+    lepricon: Lepricon
 
     plants: Plants
     explosions: Explosions
@@ -538,6 +575,8 @@ class Game {
     dragArea?: DrawArea
 
     constructor() {
+        this.binaryScore = new BinaryScore()
+        this.lepricon = new Lepricon()
         this.plants = new Plants()
         this.explosions = new Explosions()
         this.bomber = new Bomber()
@@ -556,9 +595,11 @@ class Game {
 
         this.camera.update(dt)
 
+        this.binaryScore.update(dt)
+        this.lepricon.update(dt)
         this.plants.update(dt)
         this.explosions.update(dt)
-        //this.bomber.update(dt)
+        this.bomber.update(dt)
         this.herd.update(dt)
 
         this.cursor.update(dt)
@@ -600,6 +641,11 @@ class Game {
 let game: Game
 export function _init() {
     game = new Game()
+
+    game.herd.push()
+    game.herd.push()
+    game.herd.push()
+    game.herd.push()
 }
 
 
@@ -951,6 +997,113 @@ function drawPolygon(polygon: Polygon) {
 let flowerPolygon = Polygon.circle(8)
 flowerPolygon.color = Colors.light_green
 
+class BinaryScore {
+    zeros: BinaryZero[]
+    score: string[]
+
+    off_x: Spring[]
+
+    constructor() {
+        this.score = '000000'.split('')
+        this.zeros = this.score.map(_ => BinaryZero.create(0))
+        this.off_x = this.score.map(_ => new Spring(0, 0, 800, 3))
+        this.pending_ones = []
+        this.pending_zeros = []
+
+        setInterval(() => {
+            this.incScore()
+        }, 1000)
+    }
+
+    pending_zeros: number[]
+    pending_ones: number[]
+
+    incScore(i = 0) {
+        if (i >= this.score.length) {
+        } else if (this.score[i] === '0') {
+            this.pending_ones.push(i)
+        } else {
+            this.pending_zeros.push(i)
+            this.incScore(i + 1)
+        }
+    }
+
+    update(dt: number) {
+        for (let index of this.pending_ones) {
+            this.zeros[index].setN(1)
+            this.score[index] = '1'
+
+            for (let x = index; x < this.score.length; x++)
+                this.off_x[x].velocity += 90 * (x / 6)
+        }
+        for (let index of this.pending_zeros) {
+            this.zeros[index].setN(0)
+            this.score[index] = '0'
+            for (let x = index; x < this.score.length; x++)
+                this.off_x[x].velocity += 90 * (x / 6)
+        }
+        this.pending_ones = []
+        this.pending_zeros = []
+
+
+        let x = 0
+        let y = 0
+        for (let a = 0; a < 6; a++) {
+            x += 100 + Math.sin(Math.sin(1 - a / 3) * 0.1) * 3
+            y += Math.sin(Math.sin(t * 0.01) * Math.sin(x * 0.01 + 3.5 - a / 2) * 0.3) * 3
+
+            x += this.off_x[a].position
+
+            this.zeros[a].polygonOne.x = x + -30
+            this.zeros[a].polygonOne.y = y + 30
+            this.zeros[a].polygonZero.x = x + -30
+            this.zeros[a].polygonZero.y = y + 30
+        }
+
+        for (let i in this.off_x) {
+            this.off_x[i].update(dt)
+        }
+    }
+}
+
+class BinaryZero {
+
+    n!: number
+    polygonOne!: Polygon
+    polygonZero!: Polygon
+
+    get polygon() {
+        return this.n === 0 ? this.polygonZero : this.polygonOne
+    }
+
+    static create = (n: number) => {
+
+        let res = new BinaryZero()
+        res.n = n
+        res.polygonOne = Polygon.model([80, 0, 100, 100, 80, 0, 115, 30])
+        res.polygonZero = Polygon.circle(40)
+
+        res.polygonOne.scale = 0.5
+        res.polygonZero.scale = 0.5
+        res.polygonOne.width = 12
+        res.polygonOne.spacing = 3000
+        res.polygonOne.color = Colors.light_blue
+        res.polygonOne.off_x = -100
+        res.polygonOne.off_y = -50
+
+        res.polygonZero.width = 12
+        res.polygonZero.spacing = 3000
+        res.polygonZero.color = Colors.dark_blue
+
+
+        return res
+    }
+
+    setN(n: number) {
+        this.n = n
+    }
+}
+
 export function _render() {
     if (!first_update_called) return
 
@@ -958,6 +1111,10 @@ export function _render() {
 
     // background
     lb.drawLine(0, 180, 640, 180, 640, Colors.dark_green)
+
+    for (let zero of game.binaryScore.zeros) {
+        drawPolygon(zero.polygon)
+    }
 
     drawPolygon(game.bomber.polygon)
 
@@ -987,6 +1144,8 @@ export function _render() {
     for (let impact of game.explosions.impacts) {
         drawPolygon(impact.polygon)
     }
+
+    drawPolygon(game.lepricon.polygon)
 
     let theta = game.cursor.theta
     let x = game.cursor.box.x
@@ -1050,6 +1209,18 @@ let keyboard: Keyboard
 export function _set_canvas(canvas: HTMLCanvasElement) {
     keyboard = Keyboard.bindTo(canvas)
     mouse = Mouse.bindTo(canvas)
+
+    keyboard.add_keymapping('w', 'up')
+    keyboard.add_keymapping('a', 'left')
+    keyboard.add_keymapping('s', 'down')
+    keyboard.add_keymapping('d', 'right')
+
+    keyboard.add_keymapping('i', 'up')
+    keyboard.add_keymapping('j', 'left')
+    keyboard.add_keymapping('k', 'down')
+    keyboard.add_keymapping('l', 'right')
+
+
 
     canvas.oncontextmenu = () => false
 }

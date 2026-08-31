@@ -1,4 +1,5 @@
 import { box_center, box_max, box_min, type Box } from "./collision"
+import type { ActionSign } from "./keyboard"
 
 export class Vec2 {
     static get Zero() { return new Vec2(0, 0) }
@@ -75,9 +76,10 @@ export class PositionVelocity {
                 // accelerating up from rest -> snap to floor instead of crawling from 0
                 const dir = newSpeed > 1e-6 ? newVelocity.normalize() : heading(this.acceleration)
                 newVelocity = dir.scale(this.minSpeed)
+            } else {
+                // else: decelerating toward 0 -> let it pass through, no floor
+                //this.velocity = Vec2.Zero
             }
-            // else: decelerating toward 0 -> let it pass through, no floor
-            this.velocity = Vec2.Zero
         }
 
         this.velocity = newVelocity.clampLength(0, this.maxSpeed)
@@ -100,6 +102,123 @@ export class PositionVelocity {
         const clampedDiff = Math.max(-maxStep, Math.min(maxStep, diff))
         const newAngle = curAngle + clampedDiff
         this.acceleration = new Vec2(Math.cos(newAngle), Math.sin(newAngle)).scale(mag)
+    }
+
+}
+
+export type ArcadeActionRequests = {
+    req_left: ActionSign
+    req_right: ActionSign
+    req_up: ActionSign
+    req_down: ActionSign
+}
+
+export class ArcadeLepricon {
+    body!: PositionVelocity
+
+    buttons!: ArcadeActionRequests
+
+    contain_box!: ContainWithinBox
+
+    static create = (x: number, y: number) => {
+
+        let res = new ArcadeLepricon()
+
+        res.body = new PositionVelocity()
+        res.body.position.x = x
+        res.body.position.y = y
+
+        res.body.minAccel = 1700
+        res.body.maxAccel = 2700
+        res.body.minSpeed = 30
+        res.body.maxSpeed = 300
+
+        res.contain_box = new ContainWithinBox(res.body, { x: 10, y: 10, w: 630, h: 340 })
+
+        return res
+    }
+
+    button_cool = 0
+
+    stateUpdates() {
+
+        let req_h = 0
+        if (this.buttons.req_left === 'down' || this.buttons.req_left === 'just-down') {
+            req_h = -1
+        } else if (this.buttons.req_right === 'down' || this.buttons.req_right === 'just-down') {
+            req_h = 1
+        }
+
+        let req_v = 0
+        if (this.buttons.req_up === 'down' || this.buttons.req_up === 'just-down') {
+            req_v = -1
+        } else if (this.buttons.req_down === 'down' || this.buttons.req_down === 'just-down') {
+            req_v = 1
+        }
+
+        if (this.button_cool > 0) {
+            req_h = 0
+            req_v = 0
+        }
+
+        this.body.acceleration = new Vec2(this.body.minAccel * req_h, this.body.minAccel * req_v)
+        if (req_h === 0 && req_v === 0) {
+            this.body.velocity = this.body.velocity.scale(0.1)
+        }
+        if (Math.sign(this.body.velocity.x) !== req_h) {
+        } else {
+            this.body.acceleration.x += req_h * 10
+            if (req_h > 0) {
+                if (this.body.velocity.x < this.body.minSpeed) {
+                    this.body.velocity.x = this.body.minSpeed
+                }
+            }
+        }
+        if (Math.sign(this.body.velocity.y) !== req_v) {
+        } else {
+            this.body.acceleration.y += req_v * 10
+            if (req_v > 0) {
+                if (this.body.velocity.y < this.body.minSpeed) {
+                    this.body.velocity.y = this.body.minSpeed
+                }
+            }
+        }
+
+
+    }
+
+    update(dt: number) {
+
+        this.stateUpdates()
+
+        if (this.body.position.x < 10) {
+            this.button_cool = 200
+            this.body.velocity.x = this.body.minSpeed
+            this.body.acceleration.x = this.body.minAccel
+        }
+        if (this.body.position.x > 610) {
+            this.button_cool = 200
+            this.body.velocity.x = -this.body.minSpeed
+            this.body.acceleration.x = -this.body.minAccel
+        }
+        if (this.body.position.y < 10) {
+            this.button_cool = 200
+            this.body.velocity.y = this.body.minSpeed
+            this.body.acceleration.y = this.body.minAccel
+        }
+        if (this.body.position.y > 350) {
+            this.button_cool = 200
+            this.body.velocity.y = -this.body.minSpeed
+            this.body.acceleration.y = -this.body.minAccel
+        }
+
+
+
+
+
+        this.button_cool = Math.max(0, this.button_cool - dt)
+
+        this.body.update(dt)
     }
 
 }
@@ -329,16 +448,18 @@ export class ArcadePlayer implements PositionBehavior {
         this.seperation = new Separation(body, targets.neighbors, 300)
         this.behaviors = []
         this.combined_steering = new CombinedSteering(body, this.behaviors)
-        this.upper_contain = new ContainWithinBox(body, { x: 0, y: 0, w: 640, h: 360 }, 3)
+        this.upper_contain = new ContainWithinBox(body, { x: 0, y: 0, w: 440, h: 360 }, 3)
     }
 
     state: ArcadePlayerState = 'rest'
 
-    rest_cool = 0
-    discover_cool = 0
-    wander_cool = 0
-    meet_cool = 0
-    afterMeet_cool = 0
+    state_cool = 0
+
+    setState(state: ArcadePlayerState) {
+        this.state = state
+        this.state_cool = 0
+    }
+
 
     private stateUpdates(dt: number) {
 
@@ -353,29 +474,29 @@ export class ArcadePlayer implements PositionBehavior {
                 this.behaviors.push([this.cohesion, 1])
 
 
-                if (this.rest_cool === 0) {
+                if (this.state_cool === 0) {
                     this.body.minAccel = 1
                     this.body.maxAccel = 26
                     this.body.minSpeed = 1
                     this.body.maxSpeed = 3
                     this.body.maxTurnRate = Math.PI * 1
 
-                    this.rest_cool = 2000
+                    this.state_cool = 2000
                 } else {
-                    this.rest_cool = Math.max(0, this.rest_cool - dt)
+                    this.state_cool = Math.max(0, this.state_cool - dt)
 
-                    if (this.rest_cool === 0) {
+                    if (this.state_cool === 0) {
                         this.state = 'discover'
                     }
                 }
             } break
             case 'discover': {
-                if (this.discover_cool === 0) {
-                    this.discover_cool = 2000
+                if (this.state_cool === 0) {
+                    this.state_cool = 5000
                 } else {
-                    this.discover_cool = Math.max(0, this.discover_cool - dt)
+                    this.state_cool = Math.max(0, this.state_cool - dt)
 
-                    if (this.discover_cool === 0) {
+                    if (this.state_cool === 0) {
                         this.state = 'wander'
                     }
                 }
@@ -401,11 +522,24 @@ export class ArcadePlayer implements PositionBehavior {
                 this.behaviors.push([this.evade_box, 300])
                 this.behaviors.push([this.wander, 80])
 
-                this.body.minAccel = 270
-                this.body.maxAccel = 596
-                this.body.minSpeed = 150
-                this.body.maxSpeed = 250
-                this.body.maxTurnRate = Math.PI * 7
+                if (this.state_cool === 0) {
+
+                    this.body.minAccel = 270
+                    this.body.maxAccel = 596
+                    this.body.minSpeed = 150
+                    this.body.maxSpeed = 250
+                    this.body.maxTurnRate = Math.PI * 7
+
+
+                    this.state_cool = 3344
+                } else {
+                    this.state_cool = Math.max(0, this.state_cool - dt)
+
+                    if (this.state_cool === 0) {
+                        this.state = 'discover'
+                    }
+                }
+
             } break
             case 'meet': {
                 this.behaviors.push([this.seperation, 0.1])
@@ -413,19 +547,19 @@ export class ArcadePlayer implements PositionBehavior {
                 this.behaviors.push([this.contain, 300])
 
 
-                if (this.meet_cool === 0) {
+                if (this.state_cool === 0) {
 
                     this.body.minAccel = 370
-                    this.body.maxAccel = 796
-                    this.body.minSpeed = 50
-                    this.body.maxSpeed = 250
+                    this.body.maxAccel = 1796
+                    this.body.minSpeed = 150
+                    this.body.maxSpeed = 350
                     this.body.maxTurnRate = Math.PI * 7
 
-                    this.meet_cool = 3344
+                    this.state_cool = 3344
                 } else {
-                    this.meet_cool = Math.max(0, this.meet_cool - dt)
+                    this.state_cool = Math.max(0, this.state_cool - dt)
 
-                    if (this.meet_cool === 0) {
+                    if (this.state_cool === 0) {
                         this.state = 'after-meet'
                     }
                 }
@@ -438,19 +572,19 @@ export class ArcadePlayer implements PositionBehavior {
                 this.behaviors.push([this.flee, 30])
 
 
-                if (this.afterMeet_cool === 0) {
+                if (this.state_cool === 0) {
 
                     this.body.minAccel = 570
                     this.body.maxAccel = 896
                     this.body.minSpeed = 250
                     this.body.maxSpeed = 750
-                    this.body.maxTurnRate = Math.PI * 7
+                    this.body.maxTurnRate = Math.PI * 70
 
-                    this.afterMeet_cool = 1344
+                    this.state_cool = 1344
                 } else {
-                    this.afterMeet_cool = Math.max(0, this.afterMeet_cool - dt)
+                    this.state_cool = Math.max(0, this.state_cool - dt)
 
-                    if (this.afterMeet_cool === 0) {
+                    if (this.state_cool === 0) {
                         this.state = 'wander'
                     }
                 }
@@ -464,18 +598,40 @@ export class ArcadePlayer implements PositionBehavior {
                 this.behaviors.push([this.cohesion, 1])
 
 
-                if (this.wander_cool === 0) {
+                if (this.state_cool === 0) {
                     this.body.minAccel = 170
                     this.body.maxAccel = 196
                     this.body.minSpeed = 120
                     this.body.maxSpeed = 150
                     this.body.maxTurnRate = Math.PI * 1.5
 
-                    this.wander_cool = 3344
+                    this.state_cool = 3344
                 } else {
-                    this.wander_cool = Math.max(0, this.wander_cool - dt)
+                    this.state_cool = Math.max(0, this.state_cool - dt)
 
-                    if (this.wander_cool === 0) {
+                    if (this.state_cool === 0) {
+                        this.state = 'discover'
+                    }
+                }
+            } break
+            case 'flee': {
+                this.behaviors.push([this.seperation, 1])
+                this.behaviors.push([this.cohesion, 1])
+                this.behaviors.push([this.flee, 8])
+
+
+                if (this.state_cool === 0) {
+                    this.body.minAccel = 370
+                    this.body.maxAccel = 496
+                    this.body.minSpeed = 220
+                    this.body.maxSpeed = 350
+                    this.body.maxTurnRate = Math.PI * 3
+
+                    this.state_cool = 1344
+                } else {
+                    this.state_cool = Math.max(0, this.state_cool - dt)
+
+                    if (this.state_cool === 0) {
                         this.state = 'discover'
                     }
                 }
@@ -551,7 +707,7 @@ export class ArcadeHoming implements PositionBehavior {
             this.body.maxAccel = 1700
             this.body.minSpeed = 160
             this.body.maxSpeed = 520
-            this.body.maxTurnRate = Math.PI * 2
+            this.body.maxTurnRate = Math.PI * 4
         }
 
         this.behaviors.length = 0
@@ -563,6 +719,9 @@ export class ArcadeHoming implements PositionBehavior {
 
 
     update(dt: number) {
+
+        this.arrive.target = this.seek_target.position
+
         this.life += dt
         this.stateUpdates()
         this.combined_steering.update(dt)
