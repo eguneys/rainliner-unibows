@@ -54,6 +54,8 @@ export class WebGlRenderer {
         this.quadBuffer = quadBuffer
 
 
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 
         const quadProgram = createProgram(gl, quadVS, quadFS)!
 
@@ -78,6 +80,7 @@ export class WebGlRenderer {
 
         gl.clearColor(0, 0, 0, 1)
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+        gl.depthMask(false)
 
         // draw Scene
     }

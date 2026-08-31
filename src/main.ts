@@ -67,7 +67,7 @@ export function Init_canvas(container: HTMLElement, set_viewport: (top: number, 
   resizeObserver.observe(container)
   container.appendChild(canvas)
 
-  let gl = canvas.getContext('webgl2', { antialias: false })!
+  let gl = canvas.getContext('webgl2', { antialias: false, alpha: false })!
 
   return gl
 }

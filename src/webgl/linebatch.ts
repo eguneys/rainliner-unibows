@@ -67,7 +67,7 @@ export class LineBatch {
     }
 
 
-    private flush() {
+    flush() {
         if (this.i_Line === 0) return
 
         const gl = this.gl

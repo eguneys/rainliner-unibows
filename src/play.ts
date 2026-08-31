@@ -9,6 +9,7 @@ import { LineBatch } from "./webgl/linebatch";
 import type { WebGlRenderer } from "./webgl/renderer";
 
 export const Colors = {
+    flash: new Color(255, 255, 255, 0),
     dark_green: Color.hex(0x122020),
     light_green: Color.hex(0x14a02e),
     dark_blue: Color.hex(0x143464),
@@ -60,9 +61,9 @@ export class Camera {
 
     shake_cool = 500
 
-    shake() {
-        this.shake_spring_x.velocity -= this.shake_cool * 0.9
-        this.shake_spring_y.velocity -= this.shake_cool * 1.3
+    shake(vel: Vec2) {
+        this.shake_spring_x.velocity -= this.shake_cool * 0.4 * vel.x
+        this.shake_spring_y.velocity -= this.shake_cool * 0.3 * vel.y
 
         this.shake_cool -= 100
     }
@@ -408,8 +409,8 @@ class UnicornHerd {
 
         this.neighbors.length = 0
         for (let unicorn of this.unicorns) {
-            if (unicorn.type === 'male')
-                this.neighbors.push(unicorn.arcade.body)
+            //if (unicorn.type === 'male')
+            this.neighbors.push(unicorn.arcade.body)
         }
 
         this.neighbors.push(game.lepricon.arcade.body)
@@ -421,26 +422,37 @@ class UnicornHerd {
         if (this.food_seek_cool === 0) {
             this.food_seek_cool = 7000
 
-            this.food_seek_target = game.plants.flowers[this.food_seek_j++ % game.plants.flowers.length]
-            for (let unicorn of this.unicorns) {
-                if (unicorn.arcade.state === 'eat')
-                    unicorn.arcade.setState('discover')
+            if (game.plants.flowers.length > 0) {
+                this.food_seek_target = game.plants.flowers[this.food_seek_j++ % game.plants.flowers.length]
+                for (let unicorn of this.unicorns) {
+                    if (unicorn.arcade.state === 'eat')
+                        unicorn.arcade.setState('discover')
+                }
             }
         } else {
             this.food_seek_cool = Math.max(0, this.food_seek_cool - dt)
         }
 
-        let female = this.unicorns.find(_ => _.type === 'female')
-        if (female) {
+        let females = this.unicorns.filter(_ => _.type === 'female')
+        if (females.length === 2) {
             for (let unicorn of this.unicorns) {
                 if (unicorn.type === 'male') {
+                    let female = females[0]
+                    if (
+                        distance(unicorn.arcade.body.position, females[0].arcade.body.position) <
+                        distance(unicorn.arcade.body.position, females[1].arcade.body.position)) {
+                        female = females[1]
+                    }
                     unicorn.targets.seek_target.x = female.arcade.body.position.x
                     unicorn.targets.seek_target.y = female.arcade.body.position.y
                 }
             }
 
-            female.targets.seek_target.x = this.food_seek_target.x
-            female.targets.seek_target.y = this.food_seek_target.y
+            females[0].targets.seek_target.x = this.food_seek_target.x
+            females[0].targets.seek_target.y = this.food_seek_target.y
+
+            females[1].targets.seek_target.x = this.food_seek_target.x
+            females[1].targets.seek_target.y = this.food_seek_target.y
         }
 
         for (let unicorn of this.unicorns) {
@@ -538,6 +550,23 @@ class Lepricon {
         this.arcade = ArcadeLepricon.create(200, 200)
     }
 
+    flash_cool = 0
+    knock() {
+        if (this.flash_cool > 0) return
+        if (this.arcade.button_cool === 0) {
+            this.flash_cool = 2000
+            let m = this.arcade.body.velocity.length() / (this.arcade.body.maxSpeed - this.arcade.body.minSpeed) * 2
+            this.arcade.button_cool = 400
+            this.arcade.body.velocity.x *= -3000
+            this.arcade.body.velocity.y *= -3000
+            this.arcade.body.acceleration.x *= -3000
+            this.arcade.body.acceleration.y *= -3000
+            game.camera.shake(this.arcade.body.velocity.normalize().scale(m))
+        }
+
+        game.plants.flowers.length -= 3
+    }
+
     update(dt: number) {
 
         this.arcade.buttons = {
@@ -546,6 +575,40 @@ class Lepricon {
             req_up: keyboard.getActionSign('up'),
             req_down: keyboard.getActionSign('down'),
         }
+        if (this.flash_cool > 0) {
+            this.flash_cool = Math.max(0, this.flash_cool - dt)
+        }
+
+        let arcade = this.arcade
+
+        if (arcade.body.position.x < 10) {
+            this.knock()
+            arcade.body.position.x = 10
+        }
+        if (arcade.body.position.x > 610) {
+            this.knock()
+            arcade.body.position.x = 610
+        }
+        if (arcade.body.position.y < 10) {
+            this.knock()
+            arcade.body.position.y = 10
+        }
+        if (arcade.body.position.y > 350) {
+            this.knock()
+            arcade.body.position.y = 350
+        }
+
+
+        if (this.flash_cool > 0) {
+            if (this.flash_cool < 1300) {
+                this.polygon.color = this.flash_cool % 400 < 150 ? Colors.flash : Colors.dark_yellow
+            } else {
+                this.polygon.color = this.flash_cool % 100 < 50 ? Colors.flash : Colors.dark_yellow
+            }
+        } else {
+            this.polygon.color = Color.lerp(this.polygon.color, Colors.dark_yellow, 0.2)
+        }
+
 
 
         this.arcade.update(dt)
@@ -593,6 +656,8 @@ class Game {
         this.camera.lerpPanCenter(0, 0)
 
 
+        camera2d.panX = this.camera.frustum.x + 320
+        camera2d.panY = this.camera.frustum.y + 180
         this.camera.update(dt)
 
         this.binaryScore.update(dt)
@@ -631,6 +696,28 @@ class Game {
             this.dragArea.x2 = this.cursor.x
             this.dragArea.y2 = this.cursor.y
         }
+
+        for (let flower of this.plants.flowers.map(_ => _)) {
+            if (distance(this.lepricon.arcade.body.position, flower) < 10) {
+                this.lepricon.knock()
+            }
+        }
+
+        for (let uni of this.herd.unicorns) {
+            let hitbox = {
+                x: uni.arcade.body.position.x,
+                y: uni.arcade.body.position.y
+            }
+            if (distance(this.lepricon.arcade.body.position, hitbox) < 18) {
+                this.lepricon.knock()
+                uni.targets.flee_target.x = hitbox.x
+                uni.targets.flee_target.y = hitbox.y
+                this.herd.setFlee(Vec2.fromXy(hitbox))
+                break
+            }
+        }
+
+
 
         this.cParticles.update(dt)
     }
@@ -1087,7 +1174,7 @@ class BinaryZero {
         res.polygonZero.scale = 0.5
         res.polygonOne.width = 12
         res.polygonOne.spacing = 3000
-        res.polygonOne.color = Colors.light_blue
+        res.polygonOne.color = Colors.light_yellow
         res.polygonOne.off_x = -100
         res.polygonOne.off_y = -50
 
@@ -1111,6 +1198,8 @@ export function _render() {
 
     // background
     lb.drawLine(0, 180, 640, 180, 640, Colors.dark_green)
+
+    lb.drawLine(630, 0, 640, 360, 140, Colors.dark_brown)
 
     for (let zero of game.binaryScore.zeros) {
         drawPolygon(zero.polygon)

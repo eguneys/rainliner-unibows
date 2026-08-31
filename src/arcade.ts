@@ -159,6 +159,9 @@ export class ArcadeLepricon {
         if (this.button_cool > 0) {
             req_h = 0
             req_v = 0
+            this.body.minSpeed = 200
+        } else {
+            this.body.minSpeed = 30
         }
 
         this.body.acceleration = new Vec2(this.body.minAccel * req_h, this.body.minAccel * req_v)
@@ -190,28 +193,6 @@ export class ArcadeLepricon {
     update(dt: number) {
 
         this.stateUpdates()
-
-        if (this.body.position.x < 10) {
-            this.button_cool = 200
-            this.body.velocity.x = this.body.minSpeed
-            this.body.acceleration.x = this.body.minAccel
-        }
-        if (this.body.position.x > 610) {
-            this.button_cool = 200
-            this.body.velocity.x = -this.body.minSpeed
-            this.body.acceleration.x = -this.body.minAccel
-        }
-        if (this.body.position.y < 10) {
-            this.button_cool = 200
-            this.body.velocity.y = this.body.minSpeed
-            this.body.acceleration.y = this.body.minAccel
-        }
-        if (this.body.position.y > 350) {
-            this.button_cool = 200
-            this.body.velocity.y = -this.body.minSpeed
-            this.body.acceleration.y = -this.body.minAccel
-        }
-
 
 
 
@@ -507,8 +488,8 @@ export class ArcadePlayer implements PositionBehavior {
                 this.body.maxTurnRate = Math.PI * 1.8
 
                 if (this.body.velocity.length() > epsilon) {
-                    this.behaviors.push([this.seperation, 0.1])
-                    this.behaviors.push([this.cohesion, 0.4])
+                    this.behaviors.push([this.seperation, 0.5])
+                    this.behaviors.push([this.cohesion, 1])
                 }
                 this.behaviors.push([this.arrive, 1])
             } break
@@ -624,7 +605,7 @@ export class ArcadePlayer implements PositionBehavior {
                     this.body.minAccel = 370
                     this.body.maxAccel = 496
                     this.body.minSpeed = 220
-                    this.body.maxSpeed = 350
+                    this.body.maxSpeed = 450
                     this.body.maxTurnRate = Math.PI * 3
 
                     this.state_cool = 1344
