@@ -746,13 +746,13 @@ export function _update(dt: number) {
 
     first_update_called = true
 
-    if (keyboard.is_just_down('jump')) {
+    if (keyboard.is_just_down('left')) {
         first_key_pressed = true
     }
 
     if (first_key_pressed && !first_audio_initialized) {
         first_audio_initialized = true
-        audio.playAudio('rainbow', true)
+        playback.playInc_Audio()
     }
 
     game.update(dt)
@@ -1103,7 +1103,14 @@ class BinaryScore {
     pending_ones: number[]
 
     flash_drop = 0
+    stopped_cool = -1
     dropScore() {
+        if (this.stopped_cool < 0) {
+            playback.stop_MainAudio()
+            audio.playAudio('over')
+            this.stopped_cool = 3000
+        }
+
         for (let i = 5; i >= 0; i--) {
             if (this.score[i] === '1') {
                 this.flash_drop = 1000
@@ -1114,6 +1121,9 @@ class BinaryScore {
     }
 
     incScore(i = 0) {
+        if (i === 4) {
+            playback.playInc_Audio()
+        }
         if (i >= this.score.length) {
         } else if (this.score[i] === '0') {
             this.pending_ones.push(i)
@@ -1126,6 +1136,18 @@ class BinaryScore {
     inc_cool = 0
 
     update(dt: number) {
+
+        if (this.stopped_cool > 0) {
+            this.stopped_cool -= dt
+            if (this.stopped_cool < 0) {
+                playback.playInc_Audio()
+                this.stopped_cool = -1
+            }
+        } else {
+            this.stopped_cool -= dt
+        }
+
+
 
         this.flash_drop = Math.max(0, this.flash_drop - dt)
         if (this.inc_cool === 0) {
@@ -1192,7 +1214,7 @@ class BinaryZero {
         res.polygonZero.scale = 0.5
         res.polygonOne.width = 12
         res.polygonOne.spacing = 3000
-        res.polygonOne.color = Colors.light_yellow
+        res.polygonOne.color = Colors.light_blue
         res.polygonOne.off_x = -100
         res.polygonOne.off_y = -50
 
@@ -1343,15 +1365,47 @@ export function _set_canvas(canvas: HTMLCanvasElement) {
     canvas.oncontextmenu = () => false
 }
 
+class AudioPlaybackStuff {
+
+    levels = ['', '2']
+    i_level = 0
+
+    public playInc_Audio() {
+        this.stop_MainAudio()
+        this.i_level = (this.i_level + 1) % this.levels.length
+        this.play_MainAudio()
+    }
+
+    private play_MainAudio() {
+
+        let level = this.levels[this.i_level]
+        audio.playAudio('main' + level, true)
+        audio.playAudio('lead' + level, true)
+    }
+
+    public stop_MainAudio() {
+        for (let level of this.levels) {
+            audio.stopAudio('main' + level)
+            audio.stopAudio('lead' + level)
+        }
+    }
+}
+
+let playback = new AudioPlaybackStuff()
+
 export type AudioPlayback = { stop: () => void, setVolume: (_: number) => void }
 
 class AudioPlayerManager {
     static loadAudio = async () => {
         let res = new AudioPlayerManager()
 
-        res.audio.set('jump', await AudioPlayer.init('AEgc', 270))
-        res.audio.set('landed', await AudioPlayer.init('80', 330))
-        res.audio.set('over', await AudioPlayer.init('0A3E8g0A2E7e0B3C6c1C0D6a0d1e2fefefa a a 0 0 ;', 130))
+        res.audio.set('main', await AudioPlayer.init('07 07 07 07 01 01 17 17 101 017 3 2', 80))
+        res.audio.set('lead', await AudioPlayer.init('         A     B     $   C    0 ; B', 80))
+
+        res.audio.set('main2', await AudioPlayer.init('01234 01234 01234 5432 0 0 0 00 0 000', 100))
+        res.audio.set('lead2', await AudioPlayer.init('          A  B    $    C X ; Y  Z', 100))
+
+        res.audio.set('over', await AudioPlayer.init('0148 8878;%!@', 330))
         return res
     }
 
@@ -1365,10 +1419,6 @@ class AudioPlayerManager {
 
     playAudio(name: string, loop: boolean = false) {
         if (loop) {
-            for (let [key, l] of this.looping) {
-                l.stop()
-                this.looping.delete(key)
-            }
             let pl = this.audio.get(name)!.play(loop)
             this.looping.set(name, pl)
         } else {
