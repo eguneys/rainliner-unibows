@@ -24,6 +24,7 @@ export class Vec2 {
         return new Vec2(this.x * n, this.y * n)
     }
 
+
     normalize() {
         if (this.length() === 0) return Vec2.Zero
         return this.scale(1 / this.length())
@@ -172,8 +173,11 @@ export class ArcadeLepricon {
         } else {
             this.body.acceleration.x += req_h * 10
             if (req_h > 0) {
-                if (this.body.velocity.x < this.body.minSpeed) {
-                    this.body.velocity.x = this.body.minSpeed
+
+            }
+            if (req_h < 0) {
+                if (this.body.velocity.x > -this.body.minSpeed) {
+                    this.body.velocity.x = -this.body.minSpeed
                 }
             }
         }
@@ -185,8 +189,17 @@ export class ArcadeLepricon {
                     this.body.velocity.y = this.body.minSpeed
                 }
             }
+            if (req_v !== 0 && req_h === 0) {
+                this.body.acceleration.x *= 2
+            }
         }
 
+        if (req_h === 0) {
+            this.body.velocity.x *= 0.87
+        }
+        if (req_v === 0) {
+            this.body.velocity.y *= 0.71
+        }
 
     }
 

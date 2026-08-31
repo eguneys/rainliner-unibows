@@ -552,6 +552,7 @@ class Lepricon {
 
     flash_cool = 0
     knock() {
+        game.binaryScore.dropScore()
         if (this.flash_cool > 0) return
         if (this.arcade.button_cool === 0) {
             this.flash_cool = 2000
@@ -564,7 +565,7 @@ class Lepricon {
             game.camera.shake(this.arcade.body.velocity.normalize().scale(m))
         }
 
-        game.plants.flowers.length -= 3
+        game.plants.flowers.length = Math.max(0, game.plants.flowers.length - 3)
     }
 
     update(dt: number) {
@@ -1096,14 +1097,21 @@ class BinaryScore {
         this.off_x = this.score.map(_ => new Spring(0, 0, 800, 3))
         this.pending_ones = []
         this.pending_zeros = []
-
-        setInterval(() => {
-            this.incScore()
-        }, 1000)
     }
 
     pending_zeros: number[]
     pending_ones: number[]
+
+    flash_drop = 0
+    dropScore() {
+        for (let i = 5; i >= 0; i--) {
+            if (this.score[i] === '1') {
+                this.flash_drop = 1000
+                this.pending_zeros.push(i)
+                break
+            }
+        }
+    }
 
     incScore(i = 0) {
         if (i >= this.score.length) {
@@ -1115,7 +1123,17 @@ class BinaryScore {
         }
     }
 
+    inc_cool = 0
+
     update(dt: number) {
+
+        this.flash_drop = Math.max(0, this.flash_drop - dt)
+        if (this.inc_cool === 0) {
+            this.inc_cool = 900
+            this.incScore()
+        }
+        this.inc_cool = Math.max(0, this.inc_cool - dt)
+
         for (let index of this.pending_ones) {
             this.zeros[index].setN(1)
             this.score[index] = '1'
@@ -1196,10 +1214,18 @@ export function _render() {
 
     cx.beginRender()
 
+
+    let flash_color = game.binaryScore.flash_drop === 0 || game.binaryScore.flash_drop % 200 < 50
+
     // background
     lb.drawLine(0, 180, 640, 180, 640, Colors.dark_green)
 
     lb.drawLine(630, 0, 640, 360, 140, Colors.dark_brown)
+
+    if (!flash_color) {
+
+        lb.drawLine(0, 0, 640, 0, 65, new Color(Colors.dark_red.r, Colors.dark_red.g, Colors.dark_red.b, 30))
+    }
 
     for (let zero of game.binaryScore.zeros) {
         drawPolygon(zero.polygon)
@@ -1246,6 +1272,9 @@ export function _render() {
         drawCursor(x + p.x, y + p.y, p.size, p.theta, p.size * 3)
     }
 
+    if (flash_color) {
+        lb.drawLine(0, 0, 640, 0, 60, new Color(Colors.light_cyan.r, Colors.light_cyan.g, Colors.light_cyan.b, 6))
+    }
 
     lb.endDraw()
 
