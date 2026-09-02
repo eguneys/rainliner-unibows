@@ -649,6 +649,7 @@ class Lepricon {
 
 class Game {
 
+    over = 0
     dusts: Dust[]
     binaryScore: BinaryScore
     lepricon: Lepricon
@@ -686,13 +687,13 @@ class Game {
 
     update(dt: number) {
 
-        console.log(this.lepricon.arcade.body.velocity.length() < 270)
+        this.over = Math.max(0, this.over - dt)
+
         if (this.lepricon.arcade.body.velocity.length() > 3) {
             if (this.dusts.length < 3) {
                 this.dusts.push(Dust.create(this.lepricon.arcade.body))
             }
         } else {
-
             if (this.lepricon.arcade.body.velocity.length() > 200) {
                 if (this.dusts.length < 7) {
                     this.dusts.push(Dust.create(this.lepricon.arcade.body))
@@ -1172,6 +1173,11 @@ class BinaryScore {
     }
 
     incScore(i = 0) {
+        if (this.score.join('') === '111111') {
+            game.over = 3000
+            this.score = '000000'.split('')
+            return
+        }
         if (i === 4) {
             playback.playInc_Audio()
         }
@@ -1294,6 +1300,14 @@ export function _render() {
     lb.drawLine(0, 180, 640, 180, 640, Colors.dark_green)
 
     lb.drawLine(630, 0, 640, 360, 140, Colors.dark_brown)
+
+    if (game.over > 0) {
+        for (let i = 0; i < 50 + Math.sin(t * 0.01) * 10; i++) {
+            let x = i * 600
+            let y = 300
+            lb.drawLine(x, y, x + 100, y, 400, Colors.light_red)
+        }
+    }
 
     if (!flash_color) {
 
