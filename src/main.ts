@@ -83,14 +83,17 @@ async function app(el: HTMLElement) {
     }
   })
 
-  await scene._load()
+  return new Promise(async () => {
 
-  scene._set_ctx(new WebGlRenderer(gl, 640, 360))
+    await scene._load()
 
-  scene._init()
-  initialized = true
+    scene._set_ctx(new WebGlRenderer(gl, 640, 360))
 
-  Loop(scene._update, scene._render)
+    scene._init()
+    initialized = true
+
+    Loop(scene._update, scene._render)
+  })
 }
 
 app(document.getElementById('app')!)
